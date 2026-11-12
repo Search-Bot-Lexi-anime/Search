@@ -24,7 +24,7 @@ DATA_CHANNEL_RAW = os.getenv("DATA_CHANNEL")
 def load_owner_ids() -> set[str]:
     owner_ids: set[str] = set()
     for key, value in os.environ.items():
-        if key == "OWNER_ID" or key == "OWNER_IDS" or re.fullmatch(r"OWNER_ID_\\d+", key):
+        if key in ("OWNER_ID", "OWNER_IDS") or (key.startswith("OWNER_ID_") and key[len("OWNER_ID_"):].isdigit()):
             owner_ids.update(part.strip() for part in value.split(",") if part.strip().isdigit())
     return owner_ids
 
