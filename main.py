@@ -47,6 +47,7 @@ mongo = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000, connectTimeoutM
 db = mongo[DATABASE_NAME]
 anime_collection = db["anime"]
 users_collection = db["users"]
+bot_settings_collection = db["bot_settings"]
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -168,9 +169,54 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
-    if message.from_user:
-        register_user(message.from_user.id)
-    await message.answer(ui("Send an anime name to search the saved collection."))
+    if message.from_user: register_user(message.from_user.id)
+    await send_start_page(message)
+
+@dp.message(Command("setstart"))
+async def setstart_handler(message: Message):
+    if not message.from_user or not is_owner(message.from_user.id):
+        return await message.reply(ui("This command is available to owners only."))
+    cfg=get_start_settings()
+    await message.reply(ui("<b>START MESSAGE SETTINGS</b>\\nChoose an item to edit.\\n"
+        f"Current media: {escape(str(cfg.get('media_type') or 'not set'))}\\nAbout layout is built in."),
+        reply_markup=start_settings_keyboard())
+
+@dp.callback_query(F.data.startswith("startcfg:"))
+async def startcfg_callback(callback: CallbackQuery):
+    if not callback.from_user or not is_owner(callback.from_user.id):
+        return await callback.answer("Owner only.",show_alert=True)
+    action=callback.data.split(":",1)[1]
+    if action=="reset":
+        bot_settings_collection.replace_one({"_id":START_SETTINGS_ID},DEFAULT_START.copy(),upsert=True)
+        await callback.answer("Reset")
+        return await callback.message.edit_text(ui("<b>START SETTINGS RESET</b>"),reply_markup=start_settings_keyboard())
+    if action=="remove_media":
+        bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{"media_type":None,"media_file_id":None}},upsert=True)
+        await callback.answer("Media removed")
+        return await callback.message.edit_text(ui("<b>START MESSAGE SETTINGS</b>\\nMedia removed."),reply_markup=start_settings_keyboard())
+    pending[callback.from_user.id]={"stage":"start_setting","action":action}
+    prompts={"caption":"Send new Start text (HTML supported).","media":"Send a photo or GIF.",
+      "button1":"Send Button Name | https://example.com (or REMOVE).","button2":"Send Button Name | https://example.com (or REMOVE).",
+      "button3":"Send Button Name | https://example.com (or REMOVE).","button4":"Send Button Name | https://example.com (or REMOVE)."}
+    await callback.answer(); await callback.message.answer(ui(prompts[action]))
+
+@dp.callback_query(F.data=="start:about")
+async def start_about_callback(callback: CallbackQuery):
+    await callback.answer(); body=about_text(await bot.get_me())
+    markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=small_caps("back"),callback_data="start:back")]])
+    if callback.message.photo or callback.message.animation:
+        await callback.message.edit_caption(caption=body,reply_markup=markup,parse_mode=ParseMode.HTML)
+    else:
+        await callback.message.edit_text(body,reply_markup=markup,parse_mode=ParseMode.HTML,link_preview_options={"is_disabled":True})
+
+@dp.callback_query(F.data=="start:back")
+async def start_back_callback(callback: CallbackQuery):
+    await callback.answer(); cfg=get_start_settings()
+    body=cfg.get("text") or DEFAULT_START["text"]; markup=start_keyboard(cfg)
+    if callback.message.photo or callback.message.animation:
+        await callback.message.edit_caption(caption=body,reply_markup=markup,parse_mode=ParseMode.HTML)
+    else:
+        await callback.message.edit_text(body,reply_markup=markup,parse_mode=ParseMode.HTML)
 
 @dp.message(Command("add"))
 async def add_handler(message: Message):
@@ -258,6 +304,29 @@ async def all_messages_handler(message: Message):
         return
     user_id = message.from_user.id
     register_user(user_id)
+
+    if is_owner(user_id) and user_id in pending and pending[user_id].get("stage") == "start_setting":
+        session=pending[user_id]; action=session["action"]
+        if action=="caption":
+            value=message.text or message.caption
+            if not value: return await message.reply(ui("Please send Start text."))
+            bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{"text":value}},upsert=True)
+        elif action=="media":
+            if message.photo: mt,mid="photo",message.photo[-1].file_id
+            elif message.animation: mt,mid="animation",message.animation.file_id
+            else: return await message.reply(ui("Please send a photo or GIF."))
+            bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{"media_type":mt,"media_file_id":mid}},upsert=True)
+        elif action.startswith("button"):
+            idx=action[-1]
+            if message.text and message.text.strip().lower() in {"remove","none"}: label,url="",""
+            elif message.text and "|" in message.text:
+                label,url=[x.strip() for x in message.text.split("|",1)]
+                if not label or len(label)>64 or not re.match(r"^https?://[^\\s]+$",url,re.I):
+                    return await message.reply(ui("Invalid. Send Button Name | https://example.com"))
+            else: return await message.reply(ui("Send Button Name | https://example.com (or REMOVE)."))
+            bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{f"button{idx}_text":label,f"button{idx}_url":url}},upsert=True)
+        pending.pop(user_id,None)
+        return await message.reply(ui("<b>Start settings updated.</b> Use /start to preview."))
 
     if is_owner(user_id) and user_id in pending:
         session = pending[user_id]
@@ -349,7 +418,7 @@ async def main():
             await bot.set_my_commands([
                 BotCommand(command="add", description="Add anime record"),
                 BotCommand(command="show", description="Show anime records"),
-                BotCommand(command="broadcast", description="Broadcast a message"),
+                BotCommand(command="broadcast", description="Broadcast a message"),\n                BotCommand(command="setstart", description="Configure Start message"),
             ])
             runtime_state["telegram"] = "connected"
             log.info("Aiogram polling starting")
