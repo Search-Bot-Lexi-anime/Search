@@ -295,6 +295,23 @@ async def all_messages_handler(message: Message):
     if message.text and not message.text.startswith("/"):
         match = find_anime(message.text)
         if match:
+            # Owners receive the management/settings panel instead of the public saved post.
+            if is_owner(user_id):
+                settings_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text=small_caps("replace"),
+                        callback_data=f"replace:{match['id']}",
+                    )
+                ]])
+                await message.reply(
+                    ui(
+                        f"<b>ANIME SETTINGS</b>\\n"
+                        f"<b>NAMES</b>\\n{escape(match.get('key', ''))}\\n\\n"
+                        f"<b>SAVED MESSAGE ID</b>\\n<code>{escape(str(match['id']))}</code>"
+                    ),
+                    reply_markup=settings_keyboard,
+                )
+                return
             try:
                 await deliver_saved(
                     chat_id=message.chat.id,
