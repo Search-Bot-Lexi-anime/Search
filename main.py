@@ -36,8 +36,7 @@ try:
 except ValueError as exc:
     raise RuntimeError("DATA_CHANNEL must be a numeric Telegram channel ID") from exc
 
-mongo = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
-mongo.admin.command("ping")
+mongo = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000, connectTimeoutMS=10000, socketTimeoutMS=10000)
 db = mongo[DATABASE_NAME]
 anime_collection = db["anime"]
 users_collection = db["users"]
@@ -45,10 +44,12 @@ users_collection = db["users"]
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 health_app = Flask(__name__)
+runtime_state = {"database": "connecting", "telegram": "starting"}
 
 @health_app.get("/")
 def health():
-    return {"status": "ok", "bot": "Search", "framework": "aiogram"}, 200
+    ready = runtime_state["database"] == "connected" and runtime_state["telegram"] == "connected"
+    return {"status": "ok" if ready else "starting", "bot": "Search", "framework": "aiogram", **runtime_state}, (200 if ready else 503)
 
 def run_health_server():
     health_app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")), use_reloader=False)
@@ -304,13 +305,35 @@ async def all_messages_handler(message: Message):
                 log.exception("Could not deliver saved anime message")
 
 async def main():
-    await bot.set_my_commands([
-        BotCommand(command="add", description="Add anime record"),
-        BotCommand(command="show", description="Show anime records"),
-        BotCommand(command="broadcast", description="Broadcast a message"),
-    ])
-    log.info("Starting Search bot with Aiogram; database=%s", DATABASE_NAME)
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    log.info("Search bot process started; waiting for MongoDB connection")
+    while True:
+        try:
+            await asyncio.to_thread(mongo.admin.command, "ping")
+            runtime_state["database"] = "connected"
+            log.info("MongoDB connection established; database=%s", DATABASE_NAME)
+            break
+        except Exception:
+            runtime_state["database"] = "connecting"
+            log.exception("MongoDB connection failed; retrying in 15 seconds")
+            await asyncio.sleep(15)
+
+    while True:
+        try:
+            me = await bot.get_me()
+            log.info("Telegram Bot API authenticated as @%s (id=%s)", me.username, me.id)
+            await bot.set_my_commands([
+                BotCommand(command="add", description="Add anime record"),
+                BotCommand(command="show", description="Show anime records"),
+                BotCommand(command="broadcast", description="Broadcast a message"),
+            ])
+            runtime_state["telegram"] = "connected"
+            log.info("Aiogram polling starting")
+            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+            break
+        except Exception:
+            runtime_state["telegram"] = "reconnecting"
+            log.exception("Telegram startup/polling failed; retrying in 15 seconds")
+            await asyncio.sleep(15)
 
 threading.Thread(target=run_health_server, daemon=True).start()
 
