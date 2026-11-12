@@ -281,6 +281,14 @@ async def broadcast(interaction: discord.Interaction, text: Optional[str] = None
             failed += 1
     await interaction.followup.send(ui_text(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."), ephemeral=True)
 
+@bot.tree.context_menu(name="Broadcast Message")
+async def broadcast_message_context(interaction: discord.Interaction, message: discord.Message):
+    if not is_owner(interaction.user.id):
+        return await interaction.response.send_message(ui_text("Owner only."), ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    delivered, failed = await broadcast_source(message, interaction.user)
+    await interaction.followup.send(ui_text(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."), ephemeral=True)
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
