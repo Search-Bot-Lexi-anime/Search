@@ -54,6 +54,7 @@ health_app = Flask(__name__)
 runtime_state = {"database": "connecting", "telegram": "starting"}
 
 @health_app.get("/")
+@health_app.get("/health")
 def health():
     ready = runtime_state["database"] == "connected" and runtime_state["telegram"] == "connected"
     return {"status": "ok" if ready else "starting", "bot": "Search", "framework": "aiogram", **runtime_state}, (200 if ready else 503)
@@ -353,7 +354,9 @@ async def main():
             runtime_state["telegram"] = "connected"
             log.info("Aiogram polling starting")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-            break
+            runtime_state["telegram"] = "reconnecting"
+            log.warning("Aiogram polling returned; restarting polling in 3 seconds")
+            await asyncio.sleep(3)
         except Exception:
             runtime_state["telegram"] = "reconnecting"
             log.exception("Telegram startup/polling failed; retrying in 15 seconds")
