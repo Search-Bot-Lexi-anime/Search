@@ -21,7 +21,14 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "Search")
 MONGODB_URI = os.getenv("MONGODB_URI")
 DATA_CHANNEL_RAW = os.getenv("DATA_CHANNEL")
-OWNER_IDS = {x.strip() for x in os.getenv("OWNER_ID", "").split(",") if x.strip().isdigit()}
+def load_owner_ids() -> set[str]:
+    owner_ids: set[str] = set()
+    for key, value in os.environ.items():
+        if key == "OWNER_ID" or key == "OWNER_IDS" or re.fullmatch(r"OWNER_ID_\\d+", key):
+            owner_ids.update(part.strip() for part in value.split(",") if part.strip().isdigit())
+    return owner_ids
+
+OWNER_IDS = load_owner_ids()
 
 if not BOT_TOKEN:
     raise RuntimeError("Missing BOT_TOKEN environment variable")
