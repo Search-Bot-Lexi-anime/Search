@@ -99,7 +99,7 @@ def user_ids():
     doc = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
     return [int(x) for x in doc.get("id", "").split(",") if x.isdigit()]
 
-async def clone_message(source: discord.Message, destination):
+async def clone_message(source: discord.Message, destination, content_override=None):
     files = []
     async with aiohttp.ClientSession() as session:
         for attachment in source.attachments:
@@ -112,7 +112,7 @@ async def clone_message(source: discord.Message, destination):
     rows = []
     for row_index, action_row in enumerate(source.components[:5]):
         for component in action_row.children:
-            if not isinstance(component, discord.ButtonComponent):
+            if getattr(component, "type", None) != discord.ComponentType.button:
                 continue
             style_value = getattr(component.style, "value", component.style)
             kwargs = {
@@ -140,7 +140,7 @@ async def clone_message(source: discord.Message, destination):
 
     try:
         return await destination.send(
-            content=source.content or None,
+            content=(content_override if content_override is not None else source.content) or None,
             embeds=list(source.embeds) or None,
             files=files or None,
             view=view,
@@ -247,14 +247,14 @@ async def show(interaction: discord.Interaction):
         return await interaction.response.send_message(ui_text("No anime records have been added yet."), ephemeral=True)
     await interaction.response.send_message(f"* **SAVED ANIME** — {len(docs)} records\nSelect an anime to view its details.", view=AnimeListView(docs, interaction.user.id), ephemeral=True)
 
-async def broadcast_source(source: discord.Message, requester: discord.abc.User):
+async def broadcast_source(source: discord.Message, requester: discord.abc.User, content_override=None):
     delivered, failed = 0, 0
     for user_id in user_ids():
         if user_id == requester.id:
             continue
         try:
             target = await bot.fetch_user(user_id)
-            await clone_message(source, target)
+            await clone_message(source, target, content_override=content_override)
             delivered += 1
         except Exception:
             failed += 1
@@ -293,16 +293,16 @@ async def on_message(message: discord.Message):
                 source = await message.channel.fetch_message(message.reference.message_id)
             except Exception:
                 source = None
+        broadcast_content = None
         if source is None:
             remainder = message.content.strip()[len("/broadcast"):].strip()
             if remainder or message.attachments or message.embeds:
                 source = message
-                if remainder:
-                    source.content = remainder
+                broadcast_content = remainder if remainder else None
         if source is None:
             await message.reply(ui_text("Reply to a message with /broadcast, or add text after /broadcast."), mention_author=False)
             return
-        delivered, failed = await broadcast_source(source, message.author)
+        delivered, failed = await broadcast_source(source, message.author, content_override=broadcast_content)
         await message.reply(ui_text(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."), mention_author=False)
         return
 
