@@ -1,13 +1,15 @@
-import os
-import io
-import re
+import asyncio
 import logging
-from typing import Optional
+import os
+import re
+import threading
+from html import escape
 
-import aiohttp
-import discord
-from discord import app_commands
-from discord.ext import commands
+from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandStart
+from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters
 from flask import Flask
 from pymongo import MongoClient
 from rapidfuzz import fuzz
@@ -15,38 +17,38 @@ from rapidfuzz import fuzz
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("search-bot")
 
-TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "Search")
 MONGODB_URI = os.getenv("MONGODB_URI")
-DATA_CHANNEL = os.getenv("DATA_CHANNEL")
-OWNER_IDS = {part.strip() for part in os.getenv("OWNER_ID", "").split(",") if part.strip().isdigit()}
-DATA_CHANNEL_ID = int(DATA_CHANNEL) if DATA_CHANNEL and DATA_CHANNEL.isdigit() else None
+DATA_CHANNEL_RAW = os.getenv("DATA_CHANNEL")
+OWNER_IDS = {x.strip() for x in os.getenv("OWNER_ID", "").split(",") if x.strip().isdigit()}
 
-if not TOKEN:
+if not BOT_TOKEN:
     raise RuntimeError("Missing BOT_TOKEN environment variable")
 if not MONGODB_URI:
     raise RuntimeError("Missing MONGODB_URI environment variable")
-if not DATA_CHANNEL_ID:
-    raise RuntimeError("Missing or invalid DATA_CHANNEL environment variable")
+if not DATA_CHANNEL_RAW:
+    raise RuntimeError("Missing DATA_CHANNEL environment variable")
 if not OWNER_IDS:
-    raise RuntimeError("Set OWNER_ID to comma-separated Discord user IDs")
+    raise RuntimeError("Set OWNER_ID to comma-separated Telegram user IDs")
+try:
+    DATA_CHANNEL_ID = int(DATA_CHANNEL_RAW)
+except ValueError as exc:
+    raise RuntimeError("DATA_CHANNEL must be a numeric Telegram channel ID") from exc
 
 mongo = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
+mongo.admin.command("ping")
 db = mongo[DATABASE_NAME]
 anime_collection = db["anime"]
 users_collection = db["users"]
-anime_collection.create_index("key")
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.messages = True
-intents.guilds = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 health_app = Flask(__name__)
 
 @health_app.get("/")
 def health():
-    return {"status": "ok", "bot": "Search"}, 200
+    return {"status": "ok", "bot": "Search", "framework": "aiogram"}, 200
 
 def run_health_server():
     health_app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")), use_reloader=False)
@@ -54,8 +56,8 @@ def run_health_server():
 def is_owner(user_id: int) -> bool:
     return str(user_id) in OWNER_IDS
 
-def ui_text(value: str) -> str:
-    return f"*{value}*"
+def ui(value: str) -> str:
+    return f"<i>{value}</i>"
 
 def small_caps(value: str) -> str:
     table = str.maketrans({
@@ -71,298 +73,246 @@ def clean_query(value: str) -> str:
     value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
     return " ".join(value.split())
 
+def parse_names(value: str) -> list[str]:
+    names, seen = [], set()
+    for item in re.split(r"[,;\n]+", value):
+        name = item.strip()
+        normalized = clean_query(name)
+        if normalized and normalized not in seen:
+            names.append(name)
+            seen.add(normalized)
+    return names
+
+def register_user(user_id: int):
+    users_collection.update_one(
+        {"_id": "all_users"},
+        [{"$set": {
+            "id": {
+                "$let": {
+                    "vars": {"old": {"$ifNull": ["$id", ""]}},
+                    "in": {
+                        "$cond": [
+                            {"$in": [str(user_id), {"$split": ["$$old", ","]}]},
+                            "$$old",
+                            {"$cond": [{"$eq": ["$$old", ""]}, str(user_id), {"$concat": ["$$old", ",", str(user_id)]}]}
+                        ]
+                    }
+                }
+            }
+        }}],
+        upsert=True,
+    )
+
+def get_user_ids() -> list[int]:
+    doc = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
+    return [int(x) for x in doc.get("id", "").split(",") if x.isdigit()]
+
 def find_anime(query: str):
     q = clean_query(query)
     if not q:
         return None
     best_doc, best_score = None, 0
     for doc in anime_collection.find({}, {"key": 1, "id": 1}):
-        aliases = [x.strip() for x in doc.get("key", "").split(",") if x.strip()]
-        for alias in aliases:
+        for alias in doc.get("key", "").split(","):
             candidate = clean_query(alias)
-            score = max(fuzz.WRatio(q, candidate), fuzz.partial_ratio(q, candidate), fuzz.token_set_ratio(q, candidate))
+            if not candidate:
+                continue
             if candidate == q:
                 return doc
+            score = max(fuzz.WRatio(q, candidate), fuzz.partial_ratio(q, candidate), fuzz.token_set_ratio(q, candidate))
             if score > best_score:
                 best_doc, best_score = doc, score
     return best_doc if best_score >= 72 else None
 
-def register_user(user_id: int):
-    existing = users_collection.find_one({"_id": "all_users"}, {"id": 1})
-    ids = [x for x in (existing or {}).get("id", "").split(",") if x]
-    value = str(user_id)
-    if value not in ids:
-        ids.append(value)
-        users_collection.update_one({"_id": "all_users"}, {"$set": {"id": ",".join(ids)}}, upsert=True)
+pending: dict[int, dict] = {}
+pending_broadcast: set[int] = set()
 
-def user_ids():
-    doc = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
-    return [int(x) for x in doc.get("id", "").split(",") if x.isdigit()]
+async def copy_to_data_channel(message: Message) -> int:
+    copied = await bot.copy_message(
+        chat_id=DATA_CHANNEL_ID,
+        from_chat_id=message.chat.id,
+        message_id=message.message_id,
+        reply_markup=message.reply_markup,
+    )
+    return copied.message_id
 
-async def clone_message(source: discord.Message, destination, content_override=None):
-    files = []
-    async with aiohttp.ClientSession() as session:
-        for attachment in source.attachments:
-            async with session.get(attachment.url) as response:
-                response.raise_for_status()
-                data = await response.read()
-            files.append(discord.File(io.BytesIO(data), filename=attachment.filename, spoiler=attachment.is_spoiler()))
+async def deliver_saved(chat_id: int, message_id: int, reply_to: Message | None = None):
+    kwargs = {"chat_id": chat_id, "from_chat_id": DATA_CHANNEL_ID, "message_id": message_id}
+    if reply_to is not None:
+        kwargs["reply_parameters"] = ReplyParameters(message_id=reply_to.message_id, allow_sending_without_reply=True)
+    await bot.copy_message(**kwargs)
 
-    view = None
-    rows = []
-    for row_index, action_row in enumerate(source.components[:5]):
-        for component in action_row.children:
-            if getattr(component, "type", None) != discord.ComponentType.button:
-                continue
-            style_value = getattr(component.style, "value", component.style)
-            kwargs = {
-                "label": component.label,
-                "style": discord.ButtonStyle(int(style_value)),
-                "disabled": component.disabled,
-                "emoji": component.emoji,
-                "row": row_index,
-            }
-            if component.url:
-                kwargs["url"] = component.url
-            elif component.custom_id:
-                kwargs["custom_id"] = component.custom_id
-            else:
-                continue
-            rows.append(kwargs)
+def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
+    start = page * 10
+    rows = [[InlineKeyboardButton(
+        text=small_caps(doc.get("key", "anime").split(",")[0].strip())[:64],
+        callback_data=f"anime:{doc['id']}",
+    )] for doc in docs[start:start + 10]]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=small_caps("previous"), callback_data=f"page:{page-1}"))
+    if start + 10 < len(docs):
+        nav.append(InlineKeyboardButton(text=small_caps("next"), callback_data=f"page:{page+1}"))
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    if rows:
-        view = discord.ui.View(timeout=None)
-        for kwargs in rows:
-            try:
-                view.add_item(discord.ui.Button(**kwargs))
-            except (TypeError, ValueError):
-                log.exception("Could not recreate a message button")
+@dp.message(CommandStart())
+async def start_handler(message: Message):
+    if message.from_user:
+        register_user(message.from_user.id)
+    await message.answer(ui("Send an anime name to search the saved collection."))
 
-    try:
-        return await destination.send(
-            content=(content_override if content_override is not None else source.content) or None,
-            embeds=list(source.embeds) or None,
-            files=files or None,
-            view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-    except Exception:
-        for file in files:
-            try:
-                file.close()
-            except Exception:
-                pass
-        raise
+@dp.message(Command("add"))
+async def add_handler(message: Message):
+    if not message.from_user or not is_owner(message.from_user.id):
+        return await message.reply(ui("This command is available to owners only."))
+    pending[message.from_user.id] = {"stage": "names"}
+    await message.reply(ui("Send all alternate anime names, separated by commas or new lines. Then send the original post."))
 
-def parse_names(value: str):
-    names, seen = [], set()
-    for item in value.split(","):
-        name = item.strip()
-        normalized = clean_query(name)
-        if name and normalized and normalized not in seen:
-            names.append(name)
-            seen.add(normalized)
-    return names
-
-pending = {}
-
-class ReplaceView(discord.ui.View):
-    def __init__(self, doc, owner_id):
-        super().__init__(timeout=300)
-        self.doc, self.owner_id = doc, owner_id
-
-    @discord.ui.button(label="ʀᴇᴘʟᴀᴄᴇ", style=discord.ButtonStyle.primary)
-    async def replace(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.owner_id:
-            return await interaction.response.send_message(ui_text("This control is for the owner only."), ephemeral=True)
-        pending[self.owner_id] = {"stage": "replace_post", "anime_id": str(self.doc["id"]), "key": self.doc["key"]}
-        await interaction.response.send_message(ui_text("Send the new replacement post in this chat. The old post stays active until the new one is stored."), ephemeral=True)
-
-class AnimeSelect(discord.ui.Select):
-    def __init__(self, docs, owner_id):
-        self.owner_id = owner_id
-        options = [discord.SelectOption(label=doc.get("key", "Anime")[:100], value=str(doc["id"])) for doc in docs[:25]]
-        super().__init__(placeholder=small_caps("select anime"), min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
-            return await interaction.response.send_message(ui_text("Owner only."), ephemeral=True)
-        doc = anime_collection.find_one({"id": self.values[0]}, {"key": 1, "id": 1})
-        if not doc:
-            return await interaction.response.send_message(ui_text("Anime record not found."), ephemeral=True)
-        details = f"* **ANIME NAMES**\n{doc['key']}\n\n* **SAVED MESSAGE ID**\n{doc['id']}"
-        await interaction.response.send_message(details, view=ReplaceView(doc, self.owner_id), ephemeral=True)
-
-class AnimeListView(discord.ui.View):
-    def __init__(self, docs, owner_id, page=0):
-        super().__init__(timeout=300)
-        self.docs, self.owner_id, self.page = docs, owner_id, page
-        page_docs = docs[page * 25:(page + 1) * 25]
-        if page_docs:
-            self.add_item(AnimeSelect(page_docs, owner_id))
-        if page > 0:
-            self.add_item(self.PrevButton())
-        if (page + 1) * 25 < len(docs):
-            self.add_item(self.NextButton())
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(ui_text("Owner only."), ephemeral=True)
-            return False
-        return True
-
-    class PrevButton(discord.ui.Button):
-        def __init__(self):
-            super().__init__(label="ᴘʀᴇᴠɪᴏᴜs", style=discord.ButtonStyle.secondary)
-        async def callback(self, interaction):
-            view = self.view
-            await interaction.response.edit_message(view=AnimeListView(view.docs, view.owner_id, view.page - 1))
-
-    class NextButton(discord.ui.Button):
-        def __init__(self):
-            super().__init__(label="ɴᴇxᴛ", style=discord.ButtonStyle.secondary)
-        async def callback(self, interaction):
-            view = self.view
-            await interaction.response.edit_message(view=AnimeListView(view.docs, view.owner_id, view.page + 1))
-
-@bot.event
-async def on_ready():
-    mongo.admin.command("ping")
-    await bot.tree.sync()
-    log.info("Connected as %s; MongoDB=%s; slash commands synced", bot.user, DATABASE_NAME)
-
-@bot.tree.command(name="add", description="Add an anime name record and its original post")
-async def add(interaction: discord.Interaction):
-    if not is_owner(interaction.user.id):
-        return await interaction.response.send_message(ui_text("Owner only."), ephemeral=True)
-    pending[interaction.user.id] = {"stage": "names"}
-    await interaction.response.send_message(ui_text("Send all alternate anime names in one message, separated by commas. Then send the original post."), ephemeral=True)
-
-@bot.tree.command(name="show", description="Show saved anime records")
-async def show(interaction: discord.Interaction):
-    if not is_owner(interaction.user.id):
-        return await interaction.response.send_message(ui_text("Owner only."), ephemeral=True)
+@dp.message(Command("show"))
+async def show_handler(message: Message):
+    if not message.from_user or not is_owner(message.from_user.id):
+        return await message.reply(ui("This command is available to owners only."))
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
-        return await interaction.response.send_message(ui_text("No anime records have been added yet."), ephemeral=True)
-    await interaction.response.send_message(f"* **SAVED ANIME** — {len(docs)} records\nSelect an anime to view its details.", view=AnimeListView(docs, interaction.user.id), ephemeral=True)
+        return await message.reply(ui("No anime records have been added yet."))
+    await message.answer(ui(f"<b>SAVED ANIME</b> — {len(docs)} records\nSelect a title to view its details."), reply_markup=anime_list_markup(docs, 0))
 
-async def broadcast_source(source: discord.Message, requester: discord.abc.User, content_override=None):
-    delivered, failed = 0, 0
-    for user_id in user_ids():
-        if user_id == requester.id:
-            continue
+@dp.callback_query(F.data.startswith("page:"))
+async def page_callback(callback: CallbackQuery):
+    if not callback.from_user or not is_owner(callback.from_user.id):
+        return await callback.answer("Owner only.", show_alert=True)
+    page = int(callback.data.split(":", 1)[1])
+    docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
+    await callback.message.edit_reply_markup(reply_markup=anime_list_markup(docs, page))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("anime:"))
+async def anime_detail_callback(callback: CallbackQuery):
+    if not callback.from_user or not is_owner(callback.from_user.id):
+        return await callback.answer("Owner only.", show_alert=True)
+    message_id = callback.data.split(":", 1)[1]
+    doc = anime_collection.find_one({"id": message_id}, {"key": 1, "id": 1})
+    if not doc:
+        return await callback.answer("Record not found.", show_alert=True)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{message_id}")
+    ]])
+    await callback.message.answer(
+        ui(f"<b>ANIME NAMES</b>\n{escape(doc['key'])}\n\n<b>SAVED MESSAGE ID</b>\n<code>{escape(doc['id'])}</code>"),
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("replace:"))
+async def replace_callback(callback: CallbackQuery):
+    if not callback.from_user or not is_owner(callback.from_user.id):
+        return await callback.answer("Owner only.", show_alert=True)
+    old_id = callback.data.split(":", 1)[1]
+    doc = anime_collection.find_one({"id": old_id}, {"key": 1, "id": 1})
+    if not doc:
+        return await callback.answer("Record not found.", show_alert=True)
+    pending[callback.from_user.id] = {"stage": "replace_post", "anime_id": old_id}
+    await callback.message.answer(ui("Send the new original post. The old message ID will be replaced only after the new post is copied successfully."))
+    await callback.answer()
+
+@dp.message(Command("broadcast"))
+async def broadcast_handler(message: Message):
+    if not message.from_user or not is_owner(message.from_user.id):
+        return await message.reply(ui("This command is available to owners only."))
+    if message.reply_to_message:
+        delivered, failed = await broadcast_message(message.reply_to_message)
+        return await message.reply(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+    pending_broadcast.add(message.from_user.id)
+    await message.reply(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied."))
+
+async def broadcast_message(source: Message) -> tuple[int, int]:
+    delivered = failed = 0
+    for user_id in get_user_ids():
         try:
-            target = await bot.fetch_user(user_id)
-            await clone_message(source, target, content_override=content_override)
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=source.chat.id,
+                message_id=source.message_id,
+                reply_markup=source.reply_markup,
+            )
             delivered += 1
         except Exception:
             failed += 1
-            log.exception("Broadcast failed for user %s", user_id)
+            log.exception("Broadcast failed for Telegram user %s", user_id)
     return delivered, failed
 
-@bot.tree.command(name="broadcast", description="Broadcast a text message to registered users")
-@app_commands.describe(text="Message content to broadcast")
-async def broadcast(interaction: discord.Interaction, text: Optional[str] = None):
-    if not is_owner(interaction.user.id):
-        return await interaction.response.send_message(ui_text("Owner only."), ephemeral=True)
-    if not text:
-        return await interaction.response.send_message(ui_text("Use /broadcast with message text, or reply to a message with the /broadcast chat command."), ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
-    delivered, failed = 0, 0
-    for user_id in user_ids():
-        if user_id == interaction.user.id:
-            continue
-        try:
-            target = await bot.fetch_user(user_id)
-            await target.send(content=text, allowed_mentions=discord.AllowedMentions.none())
-            delivered += 1
-        except Exception:
-            failed += 1
-    await interaction.followup.send(ui_text(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."), ephemeral=True)
-
-@bot.tree.context_menu(name="Broadcast Message")
-async def broadcast_message_context(interaction: discord.Interaction, message: discord.Message):
-    if not is_owner(interaction.user.id):
-        return await interaction.response.send_message(ui_text("Owner only."), ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
-    delivered, failed = await broadcast_source(message, interaction.user)
-    await interaction.followup.send(ui_text(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."), ephemeral=True)
-
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
+@dp.message()
+async def all_messages_handler(message: Message):
+    if not message.from_user or message.from_user.is_bot:
         return
+    user_id = message.from_user.id
+    register_user(user_id)
 
-    if is_owner(message.author.id) and message.content.strip().lower().startswith("/broadcast"):
-        source = None
-        if message.reference and message.reference.message_id:
-            try:
-                source = await message.channel.fetch_message(message.reference.message_id)
-            except Exception:
-                source = None
-        broadcast_content = None
-        if source is None:
-            remainder = message.content.strip()[len("/broadcast"):].strip()
-            if remainder or message.attachments or message.embeds:
-                source = message
-                broadcast_content = remainder if remainder else None
-        if source is None:
-            await message.reply(ui_text("Reply to a message with /broadcast, or add text after /broadcast."), mention_author=False)
-            return
-        delivered, failed = await broadcast_source(source, message.author, content_override=broadcast_content)
-        await message.reply(ui_text(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."), mention_author=False)
-        return
-
-    if is_owner(message.author.id) and message.author.id in pending:
-        session = pending[message.author.id]
+    if is_owner(user_id) and user_id in pending:
+        session = pending[user_id]
         if session["stage"] == "names":
-            names = parse_names(message.content)
+            names = parse_names(message.text or message.caption or "")
             if not names:
-                return await message.reply(ui_text("Send at least one anime name."), mention_author=False)
+                return await message.reply(ui("Send at least one anime name."))
             session["key"] = ", ".join(names)
             session["stage"] = "post"
-            await message.reply(ui_text("Names received. Now send the original message to save in the Data Channel."), mention_author=False)
-            return
+            return await message.reply(ui("Names received. Now send the original post with its media and buttons."))
         if session["stage"] in ("post", "replace_post"):
             try:
-                data_channel = bot.get_channel(DATA_CHANNEL_ID) or await bot.fetch_channel(DATA_CHANNEL_ID)
-                saved = await clone_message(message, data_channel)
+                new_id = await copy_to_data_channel(message)
                 if session["stage"] == "post":
-                    duplicate = False
+                    existing_names = set()
                     for record in anime_collection.find({}, {"key": 1}):
-                        old_names = {clean_query(x) for x in record.get("key", "").split(",")}
-                        if any(clean_query(x) in old_names for x in session["key"].split(",") ):
-                            duplicate = True
-                            break
-                    if duplicate:
-                        await saved.delete()
-                        await message.reply(ui_text("One or more names already exist. Use /show and Replace instead."), mention_author=False)
+                        existing_names.update(clean_query(x) for x in record.get("key", "").split(","))
+                    if any(clean_query(x) in existing_names for x in session["key"].split(",")):
+                        await bot.delete_message(DATA_CHANNEL_ID, new_id)
+                        await message.reply(ui("One or more names already exist. Use /show and Replace to update an existing record."))
                     else:
-                        anime_collection.insert_one({"key": session["key"], "id": str(saved.id)})
-                        await message.reply(ui_text("Anime record saved successfully."), mention_author=False)
+                        anime_collection.insert_one({"key": session["key"], "id": str(new_id)})
+                        await message.reply(ui("Anime record saved successfully."))
                 else:
-                    anime_collection.update_one({"id": session["anime_id"]}, {"$set": {"id": str(saved.id)}})
-                    await message.reply(ui_text("Replacement saved. The new message ID is now active."), mention_author=False)
+                    result = anime_collection.update_one({"id": session["anime_id"]}, {"$set": {"id": str(new_id)}})
+                    if result.matched_count:
+                        await message.reply(ui("Replacement saved successfully."))
+                    else:
+                        await bot.delete_message(DATA_CHANNEL_ID, new_id)
+                        await message.reply(ui("Original record was not found; existing data was left unchanged."))
             except Exception:
-                log.exception("Could not save anime post")
-                await message.reply(ui_text("Could not save the post. The existing database record was not changed."), mention_author=False)
+                log.exception("Anime post save/replace failed")
+                await message.reply(ui("Could not save the post. The existing database record was not changed."))
             finally:
-                pending.pop(message.author.id, None)
+                pending.pop(user_id, None)
             return
 
-    register_user(message.author.id)
-    if message.content and message.content.startswith(("/", "!")):
-        return
-    doc = find_anime(message.content or "")
-    if doc:
-        try:
-            data_channel = bot.get_channel(DATA_CHANNEL_ID) or await bot.fetch_channel(DATA_CHANNEL_ID)
-            original = await data_channel.fetch_message(int(doc["id"]))
-            await clone_message(original, message.channel)
-        except Exception:
-            log.exception("Anime result delivery failed")
-    await bot.process_commands(message)
+    if is_owner(user_id) and user_id in pending_broadcast:
+        pending_broadcast.discard(user_id)
+        delivered, failed = await broadcast_message(message)
+        return await message.reply(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+
+    if message.text and not message.text.startswith("/"):
+        match = find_anime(message.text)
+        if match:
+            try:
+                await deliver_saved(
+                    chat_id=message.chat.id,
+                    message_id=int(match["id"]),
+                    reply_to=message if message.chat.type in ("group", "supergroup") else None,
+                )
+            except Exception:
+                log.exception("Could not deliver saved anime message")
+
+async def main():
+    await bot.set_my_commands([
+        BotCommand(command="add", description="Add anime record"),
+        BotCommand(command="show", description="Show anime records"),
+        BotCommand(command="broadcast", description="Broadcast a message"),
+    ])
+    log.info("Starting Search bot with Aiogram; database=%s", DATABASE_NAME)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 threading.Thread(target=run_health_server, daemon=True).start()
-bot.run(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
