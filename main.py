@@ -129,10 +129,75 @@ def find_anime(query: str):
                 continue
             if candidate == q:
                 return doc
-            score = max(fuzz.WRatio(q, candidate), fuzz.partial_ratio(q, candidate), fuzz.token_set_ratio(q, candidate))
+            q_words, c_words = q.split(), candidate.split()
+            if candidate.startswith(q) or any(word.startswith(q) for word in c_words):
+                score = 100 if len(q) >= 3 else 90
+            elif all(any(word.startswith(qw) for word in c_words) for qw in q_words):
+                score = 96 if len(q) >= 5 else 86
+            else:
+                score = max(fuzz.WRatio(q, candidate), fuzz.partial_ratio(q, candidate),
+                            fuzz.token_set_ratio(q, candidate), fuzz.ratio(q, candidate))
             if score > best_score:
                 best_doc, best_score = doc, score
-    return best_doc if best_score >= 72 else None
+    threshold = 58 if len(q) >= 7 else 66 if len(q) >= 4 else 82
+    return best_doc if best_score >= threshold else None
+
+START_SETTINGS_ID = "start_message"
+DEFAULT_START = {
+    "_id": START_SETTINGS_ID,
+    "text": "<b>Welcome to Lexi Anime Finder!</b>\n<i>Search your favourite anime by sending its name below.</i>",
+    "media_type": None, "media_file_id": None,
+    "button1_text": "", "button1_url": "",
+    "button2_text": "", "button2_url": "",
+    "button3_text": "", "button3_url": "",
+    "button4_text": "", "button4_url": "",
+}
+
+def get_start_settings() -> dict:
+    saved = bot_settings_collection.find_one({"_id": START_SETTINGS_ID}) or {}
+    return {**DEFAULT_START, **saved}
+
+def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
+    rows = []
+    for idx in range(1, 5):
+        label, url = cfg.get(f"button{idx}_text"), cfg.get(f"button{idx}_url")
+        if label and url and re.match(r"^https?://[^\s]+$", url, re.I):
+            rows.append([InlineKeyboardButton(text=small_caps(label)[:64], url=url)])
+    rows.append([InlineKeyboardButton(text=small_caps("about"), callback_data="start:about")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def start_settings_keyboard() -> InlineKeyboardMarkup:
+    items = [("edit text", "caption"), ("set photo / gif", "media"),
+             ("button 1", "button1"), ("button 2", "button2"),
+             ("button 3", "button3"), ("button 4", "button4"),
+             ("remove media", "remove_media"), ("reset defaults", "reset")]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=small_caps(label), callback_data=f"startcfg:{action}")]
+        for label, action in items
+    ])
+
+def about_text(me) -> str:
+    return ui(
+        "<b>ABOUT LEXI ANIME FINDER</b>\n"
+        "<b>HOW IT WORKS</b>\nFind saved anime posts by title, alternate name, partial name or a small typo.\n\n"
+        "<b>SEARCH NOTES</b>\nSearch is case-insensitive and uses fuzzy matching to help with incomplete or misspelled titles.\n\n"
+        "<b>ABOUT ME</b>\nLexi Anime Finder is made for anime lovers.\n\n"
+        "<b>INFORMATION</b>\n"
+        f"Bot: @{escape(me.username or 'LexiAnimeFinderBot')}\nVersion: 1.0"
+    )
+
+async def send_start_page(message: Message):
+    cfg = get_start_settings()
+    text = cfg.get("text") or DEFAULT_START["text"]
+    markup = start_keyboard(cfg)
+    media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
+    if media_type == "photo" and media_id:
+        await message.answer_photo(media_id, caption=text, reply_markup=markup, parse_mode=ParseMode.HTML)
+    elif media_type == "animation" and media_id:
+        await message.answer_animation(media_id, caption=text, reply_markup=markup, parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(text, reply_markup=markup, parse_mode=ParseMode.HTML,
+                             link_preview_options={"is_disabled": True})
 
 pending: dict[int, dict] = {}
 pending_broadcast: set[int] = set()
@@ -255,7 +320,7 @@ async def anime_detail_callback(callback: CallbackQuery):
         InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{message_id}")
     ]])
     await callback.message.answer(
-        ui(f"<b>ANIME NAMES</b>\n{escape(doc['key'])}\n\n<b>SAVED MESSAGE ID</b>\n<code>{escape(doc['id'])}</code>"),
+        ui(f"<b>ANIME NAMES</b>\n{escape(doc['key'])}\n\n<b>STATUS</b>\nSaved and ready to replace."),
         reply_markup=keyboard,
     )
     await callback.answer()
@@ -321,7 +386,7 @@ async def all_messages_handler(message: Message):
             if message.text and message.text.strip().lower() in {"remove","none"}: label,url="",""
             elif message.text and "|" in message.text:
                 label,url=[x.strip() for x in message.text.split("|",1)]
-                if not label or len(label)>64 or not re.match(r"^https?://[^\\s]+$",url,re.I):
+                if not label or len(label)>64 or not re.match(r"^https?://[^\s]+$",url,re.I):
                     return await message.reply(ui("Invalid. Send Button Name | https://example.com"))
             else: return await message.reply(ui("Send Button Name | https://example.com (or REMOVE)."))
             bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{f"button{idx}_text":label,f"button{idx}_url":url}},upsert=True)
@@ -393,7 +458,7 @@ async def all_messages_handler(message: Message):
                 await deliver_saved(
                     chat_id=message.chat.id,
                     message_id=int(match["id"]),
-                    reply_to=message if message.chat.type in ("group", "supergroup") else None,
+                    reply_to=message,
                 )
             except Exception:
                 log.exception("Could not deliver saved anime message")
@@ -418,7 +483,8 @@ async def main():
             await bot.set_my_commands([
                 BotCommand(command="add", description="Add anime record"),
                 BotCommand(command="show", description="Show anime records"),
-                BotCommand(command="broadcast", description="Broadcast a message"),\n                BotCommand(command="setstart", description="Configure Start message"),
+                BotCommand(command="broadcast", description="Broadcast a message"),
+                BotCommand(command="setstart", description="Configure Start message"),
             ])
             runtime_state["telegram"] = "connected"
             log.info("Aiogram polling starting")
