@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import threading
-from html import escape
+from html import escape, unescape
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -315,7 +315,7 @@ async def startcfg_callback(callback: CallbackQuery):
 
     if action == "caption_show":
         caption = cfg.get("text") or DEFAULT_CAPTION
-        return await callback.answer(caption[:190], show_alert=True)
+        return await callback.answer(re.sub(r"<[^>]*>", "", unescape(caption))[:190], show_alert=True)
 
     if action == "caption_default":
         bot_settings_collection.update_one(
@@ -328,7 +328,7 @@ async def startcfg_callback(callback: CallbackQuery):
         )
 
     if action == "caption_edit":
-        pending[callback.from_user.id] = {"stage": "start_caption"}
+        pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
         return await callback.message.answer(ui("<b>SEND NEW CAPTION</b>\nSend the caption text now. HTML formatting is supported."))
 
@@ -341,7 +341,7 @@ async def startcfg_callback(callback: CallbackQuery):
         return await callback.answer()
 
     if action == "media_edit":
-        pending[callback.from_user.id] = {"stage": "start_media"}
+        pending[callback.from_user.id] = {"stage": "start_media", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
         return await callback.message.answer(ui("<b>SEND START MEDIA</b>\nSend one photo or GIF to set it as the start media."))
 
@@ -371,7 +371,7 @@ async def startcfg_callback(callback: CallbackQuery):
             )
             await callback.answer(f"Button {idx} disabled.")
             return await refresh_start_settings(callback)
-        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx}
+        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
         return await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\nSend the button label."))
 
@@ -487,6 +487,13 @@ async def all_messages_handler(message: Message):
     user_id = message.from_user.id
     register_user(user_id)
 
+    async def refresh_start_panel(session):
+        try:
+            cfg = get_start_settings()
+            await bot.edit_message_text(start_settings_text(cfg), chat_id=session["settings_chat_id"],
+                                        message_id=session["settings_message_id"], reply_markup=start_settings_keyboard(cfg))
+        except Exception:
+            log.exception("Could not refresh /setstart panel after saving")
     if is_owner(user_id) and user_id in pending and pending[user_id].get("stage") in (
         "start_caption", "start_media", "start_button_text", "start_button_url"
     ):
@@ -504,6 +511,7 @@ async def all_messages_handler(message: Message):
                 log.exception("Start caption save failed")
                 return await message.reply(ui("<b>SAVE FAILED</b>\nCaption could not be saved."))
             pending.pop(user_id, None)
+            await refresh_start_panel(session)
             return await message.reply(ui("<b>CAPTION SAVED</b>\nThe start caption has been updated."))
 
         if stage == "start_media":
@@ -519,6 +527,7 @@ async def all_messages_handler(message: Message):
                 upsert=True
             )
             pending.pop(user_id, None)
+            await refresh_start_panel(session)
             return await message.reply(ui("<b>MEDIA SAVED</b>\nThe start media has been updated."))
 
         if stage == "start_button_text":
@@ -540,6 +549,7 @@ async def all_messages_handler(message: Message):
                 upsert=True
             )
             pending.pop(user_id, None)
+            await refresh_start_panel(session)
             return await message.reply(ui(f"<b>BUTTON {idx} ENABLED</b>\nThe button is saved and active on /start."))
 
 
