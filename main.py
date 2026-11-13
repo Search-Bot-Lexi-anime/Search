@@ -933,11 +933,15 @@ async def all_messages_handler(message: Message):
             task.cancel()
         delivered, failed, pinned, pin_failed = await broadcast_message(message, pin=session["pin"])
         if session["pin"]:
-            return await message.answer(ui(
-                f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
+            result = await message.answer(ui(
+                f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
                 f"Pinned: {pinned}. Pin failed: {pin_failed}."
             ))
-        return await message.answer(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        else:
+            result = await message.answer(ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        await cleanup_owner_ui(user_id, keep=(result.chat.id, result.message_id))
+        await track_owner_ui(user_id, result)
+        return
 
     if message.text and not message.text.startswith("/"):
         match = find_anime(message.text)
