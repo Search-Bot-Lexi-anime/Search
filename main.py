@@ -345,10 +345,10 @@ async def startcfg_callback(callback: CallbackQuery):
             ui("<b><u>START BUTTONS</u></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" +
                "\n".join(f"<i>Button {i}: {'ON ✅' if cfg.get(f'button{i}_text') and cfg.get(f'button{i}_url') else 'OFF ❌'}</i>" for i in range(1, 5))),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f"1 {'ON ✅' if cfg.get('button1_text') and cfg.get('button1_url') else 'OFF ❌'}", callback_data="startcfg:button:1"),
-                 InlineKeyboardButton(text=f"2 {'ON ✅' if cfg.get('button2_text') and cfg.get('button2_url') else 'OFF ❌'}", callback_data="startcfg:button:2")],
-                [InlineKeyboardButton(text=f"3 {'ON ✅' if cfg.get('button3_text') and cfg.get('button3_url') else 'OFF ❌'}", callback_data="startcfg:button:3"),
-                 InlineKeyboardButton(text=f"4 {'ON ✅' if cfg.get('button4_text') and cfg.get('button4_url') else 'OFF ❌'}", callback_data="startcfg:button:4")],
+                [InlineKeyboardButton(text=small_caps(f"1 {'ON ✅' if cfg.get('button1_text') and cfg.get('button1_url') else 'OFF ❌'}"), callback_data="startcfg:button:1"),
+                 InlineKeyboardButton(text=small_caps(f"2 {'ON ✅' if cfg.get('button2_text') and cfg.get('button2_url') else 'OFF ❌'}"), callback_data="startcfg:button:2")],
+                [InlineKeyboardButton(text=small_caps(f"3 {'ON ✅' if cfg.get('button3_text') and cfg.get('button3_url') else 'OFF ❌'}"), callback_data="startcfg:button:3"),
+                 InlineKeyboardButton(text=small_caps(f"4 {'ON ✅' if cfg.get('button4_text') and cfg.get('button4_url') else 'OFF ❌'}"), callback_data="startcfg:button:4")],
                 [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="startcfg:home")]
             ])
         )
@@ -438,7 +438,7 @@ async def start_about_callback(callback: CallbackQuery):
         bot_profile = await bot.get_me()
     body = about_text(bot_profile)
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=small_caps("back"), callback_data="start:back")]
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="start:back")]
     ])
     if callback.message.photo or callback.message.animation:
         await callback.message.edit_caption(caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
