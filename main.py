@@ -321,24 +321,27 @@ async def commands_handler(message: Message):
     cfg = get_start_settings()
 
     # Send the fresh panel first; only after it exists, remove the previous panel and command.
-    new_panel = await message.answer(
-        start_settings_text(cfg),
+    # Use send_message directly: never inherit/reuse the incoming command as a reply target.
+    new_panel = await bot.send_message(
+        chat_id=message.chat.id,
+        text=start_settings_text(cfg),
         reply_markup=start_settings_keyboard(cfg),
     )
 
     old_panel = commands_panels.get(owner_id)
     commands_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
 
+    # The fresh panel is already visible. Now clean up the command and previous panel.
+    try:
+        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    except Exception:
+        log.debug("Could not delete /commands request")
+
     if old_panel:
         try:
             await bot.delete_message(chat_id=old_panel[0], message_id=old_panel[1])
         except Exception:
             log.debug("Could not delete previous /commands panel")
-
-    try:
-        await message.delete()
-    except Exception:
-        log.debug("Could not delete /commands request")
 
 
 @dp.message(Command("setstart"))
