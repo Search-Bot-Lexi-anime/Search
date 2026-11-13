@@ -695,7 +695,7 @@ async def all_messages_handler(message: Message):
                     ui(
                         f"<b>ANIME SETTINGS</b>\n"
                         f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
-                        f"<b>MANAGEMENT</b>\nUse the button below to replace the saved post."
+                        f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
                     ),
                     reply_markup=settings_keyboard,
                 )
