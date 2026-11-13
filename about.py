@@ -8,8 +8,8 @@ def about_text(me) -> str:
     return (
         "<b>✨ ᴀʙᴏᴜᴛ ᴍᴇ</b>\n\n"
         "<i>Lexi Anime Finder is a simple companion for discovering your favourite <b><i>anime posts</i></b>. "
-        "Send an anime title or one of its alternate names and get the <b><i>matching saved post</i></b> when available. "
-        "Search is designed to understand common title variations and help you find what you are looking for.</i>\n\n"
+        "Search for an anime by its title or an alternate name to find the anime if it is available. "
+        "Search understands common title variations and helps you find the anime you are looking for.</i>\n\n
         "<b>✦ ɪɴғᴏʀᴍᴀᴛɪᴏɴ</b>\n"
         f"<b>➤ ɴᴀᴍᴇ : {bot_link}</b>\n"
         "<b>➤ ᴄʀᴇᴀᴛᴏʀ : ʏᴜᴛᴀ</b>\n"
