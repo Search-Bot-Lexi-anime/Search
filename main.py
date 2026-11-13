@@ -268,12 +268,11 @@ async def send_start_page(message: Message):
     markup = start_keyboard(cfg)
     media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
     if media_type == "photo" and media_id:
-        await message.answer_photo(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
+        return await message.answer_photo(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     elif media_type == "animation" and media_id:
-        await message.answer_animation(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
-    else:
-        await message.answer(body, reply_markup=markup, parse_mode=ParseMode.HTML,
-                             link_preview_options={"is_disabled": True})
+        return await message.answer_animation(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
+    return await message.answer(body, reply_markup=markup, parse_mode=ParseMode.HTML,
+                                link_preview_options={"is_disabled": True})
 
 
 pending: dict[int, dict] = {}
@@ -365,14 +364,17 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
+    owner_id = message.from_user.id if message.from_user and is_owner(message.from_user.id) else None
     if message.from_user:
-        if is_owner(message.from_user.id):
-            await cancel_owner_process(message.from_user.id, notify_broadcast=True)
-            await cleanup_owner_ui(message.from_user.id)
+        if owner_id is not None:
+            await cancel_owner_process(owner_id, notify_broadcast=True)
         else:
             await cancel_broadcast_wait(message.from_user.id, notify=True)
         register_user(message.from_user.id)
-    await send_start_page(message)
+    panel = await send_start_page(message)
+    if owner_id is not None:
+        await cleanup_owner_ui(owner_id, keep=(panel.chat.id, panel.message_id))
+        await track_owner_ui(owner_id, panel, "panel")
 
 @dp.message(Command("commands"))
 async def commands_handler(message: Message):
