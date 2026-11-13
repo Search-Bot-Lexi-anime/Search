@@ -432,7 +432,14 @@ async def page_callback(callback: CallbackQuery):
         return await callback.answer("Owner only.", show_alert=True)
     page = int(callback.data.split(":", 1)[1])
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
-    await callback.message.edit_reply_markup(reply_markup=anime_list_markup(docs, page))
+    total_pages = max(1, (len(docs) + 9) // 10)
+    page = max(0, min(page, total_pages - 1))
+    start = page * 10
+    end = min(start + 10, len(docs))
+    await callback.message.edit_text(
+        ui(f"<b>SAVED ANIME</b> — {len(docs)} records\\n<i>Page {page + 1} of {total_pages} · Showing {start + 1 if docs else 0}–{end}</i>\\nSelect a title to view its details."),
+        reply_markup=anime_list_markup(docs, page),
+    )
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("anime:"))
