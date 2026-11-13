@@ -341,12 +341,13 @@ async def startcfg_callback(callback: CallbackQuery):
     session = pending.get(callback.from_user.id)
     if session and session.get("settings_message_id") == callback.message.message_id:
         pending.pop(callback.from_user.id, None)
-        for message_id in (session.get("prompt_message_id"), session.get("last_input_message_id")):
-            if message_id:
-                try:
-                    await bot.delete_message(session["settings_chat_id"], message_id)
-                except Exception:
-                    log.debug("Could not clear previous /setstart interaction message")
+        message_ids = set(session.get("prompt_message_ids", [])) | set(session.get("input_message_ids", []))
+        message_ids.update(message_id for message_id in (session.get("prompt_message_id"), session.get("last_input_message_id")) if message_id)
+        for message_id in message_ids:
+            try:
+                await bot.delete_message(session["settings_chat_id"], message_id)
+            except Exception:
+                log.debug("Could not clear previous /setstart interaction message")
 
     if action in ("back", "home"):
         return await refresh_start_settings(callback)
@@ -370,12 +371,13 @@ async def startcfg_callback(callback: CallbackQuery):
         return await callback.answer("Default caption restored.")
 
     if action == "caption_edit":
-        pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
+        pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
         prompt = await callback.message.answer(
             ui("<b>SEND NEW CAPTION</b>\nSend the caption text now. HTML formatting is supported.\n\n" + caption_variables_help())
         )
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
+        pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         return
 
     if action == "media":
@@ -387,10 +389,11 @@ async def startcfg_callback(callback: CallbackQuery):
         return await callback.answer()
 
     if action == "media_edit":
-        pending[callback.from_user.id] = {"stage": "start_media", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
+        pending[callback.from_user.id] = {"stage": "start_media", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
-        prompt = await callback.message.answer(ui("<b>SEND START MEDIA</b>\\nSend one photo or GIF to set it as the start media."))
+        prompt = await callback.message.answer(ui("<b>SEND START MEDIA</b>\nSend one photo or GIF to set it as the start media."))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
+        pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         return
 
     if action == "media_remove":
@@ -414,10 +417,11 @@ async def startcfg_callback(callback: CallbackQuery):
             )
             await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
             return await callback.answer(f"Button {idx} disabled.")
-        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
+        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
-        prompt = await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\\nSend the button label."))
+        prompt = await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\nSend the button label."))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
+        pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         return
 
     await callback.answer("Unknown setting.", show_alert=True)
@@ -551,17 +555,17 @@ async def all_messages_handler(message: Message):
     register_user(user_id)
 
     async def clear_setup_messages(session, input_message: Message | None = None):
-        if input_message is not None:
+        input_ids = list(session.get("input_message_ids", []))
+        if input_message is not None and input_message.message_id not in input_ids:
+            input_ids.append(input_message.message_id)
+        prompt_ids = list(session.get("prompt_message_ids", []))
+        if session.get("prompt_message_id") and session["prompt_message_id"] not in prompt_ids:
+            prompt_ids.append(session["prompt_message_id"])
+        for message_id in input_ids + prompt_ids:
             try:
-                await input_message.delete()
+                await bot.delete_message(session["settings_chat_id"], message_id)
             except Exception:
-                log.debug("Could not delete setup input message")
-        prompt_id = session.get("prompt_message_id")
-        if prompt_id:
-            try:
-                await bot.delete_message(session["settings_chat_id"], prompt_id)
-            except Exception:
-                log.debug("Could not delete setup prompt message")
+                log.debug("Could not clear previous /setstart interaction message")
 
     async def refresh_start_panel(session):
         try:
@@ -573,6 +577,7 @@ async def all_messages_handler(message: Message):
     ):
         session = pending[user_id]
         session["last_input_message_id"] = message.message_id
+        session.setdefault("input_message_ids", []).append(message.message_id)
         stage = session["stage"]
         if stage == "start_caption":
             value = message.text or message.caption
@@ -616,6 +621,7 @@ async def all_messages_handler(message: Message):
             await clear_setup_messages(session, message)
             prompt = await message.answer(ui("<b>BUTTON LINK</b>\nNow send the URL beginning with https://"))
             session["prompt_message_id"] = prompt.message_id
+            session.setdefault("prompt_message_ids", []).append(prompt.message_id)
             return
 
         if stage == "start_button_url":
