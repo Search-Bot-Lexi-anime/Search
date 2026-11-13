@@ -71,6 +71,9 @@ def is_owner(user_id: int) -> bool:
     return str(user_id) in OWNER_IDS
 
 def ui(value: str) -> str:
+    # Italicize only plain text. Preserve every message that already contains formatting.
+    if re.search(r"</?(?:b|strong|i|em|u|s|strike|code|pre|a|blockquote|tg-spoiler)(?:\s|>)", value, re.I):
+        return value
     return f"<i>{value}</i>"
 
 def small_caps(value: str) -> str:
@@ -268,16 +271,16 @@ async def send_start_page(message: Message):
     markup = start_keyboard(cfg)
     media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
     if media_type == "photo" and media_id:
-        await message.answer_photo(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
+        return await message.answer_photo(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     elif media_type == "animation" and media_id:
-        await message.answer_animation(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
-    else:
-        await message.answer(body, reply_markup=markup, parse_mode=ParseMode.HTML,
-                             link_preview_options={"is_disabled": True})
+        return await message.answer_animation(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
+    return await message.answer(body, reply_markup=markup, parse_mode=ParseMode.HTML,
+                                link_preview_options={"is_disabled": True})
 
 
 pending: dict[int, dict] = {}
 pending_broadcast: dict[int, dict] = {}
+owner_ui_state: dict[int, dict] = {}
 
 async def cancel_broadcast_wait(user_id: int, notify: bool = False):
     session = pending_broadcast.pop(user_id, None)
@@ -286,10 +289,31 @@ async def cancel_broadcast_wait(user_id: int, notify: bool = False):
         if task and task is not asyncio.current_task():
             task.cancel()
         if notify:
-            await bot.send_message(session["chat_id"], ui("Broadcast cancelled."))
+            await bot.send_message(session["chat_id"], ui("✨ Broadcast cancelled."))
+
+async def cancel_owner_process(user_id: int, notify_broadcast: bool = False):
+    pending.pop(user_id, None)
+    await cancel_broadcast_wait(user_id, notify=notify_broadcast)
+
+async def track_owner_ui(user_id: int, message: Message, kind: str = "prompt"):
+    state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
+    state["panels" if kind == "panel" else "prompts"].append((message.chat.id, message.message_id))
+
+async def cleanup_owner_ui(user_id: int, keep: tuple[int, int] | None = None):
+    state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
+    old_items = state["prompts"] + state["panels"]
+    state["prompts"], state["panels"] = [], []
+    for chat_id, message_id in old_items:
+        if keep == (chat_id, message_id):
+            state["panels"].append((chat_id, message_id))
+            continue
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            log.debug("Could not delete previous owner prompt/panel")
 
 async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
-    await cancel_broadcast_wait(user_id)
+    await cancel_owner_process(user_id)
     session = {"chat_id": chat_id, "pin": pin}
     pending_broadcast[user_id] = session
 
@@ -298,7 +322,8 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
             await asyncio.sleep(30)
             if pending_broadcast.get(user_id) is session:
                 pending_broadcast.pop(user_id, None)
-                await bot.send_message(chat_id, ui("Broadcast cancelled due to 30 seconds of inactivity."))
+                await cleanup_owner_ui(user_id)
+                await bot.send_message(chat_id, ui("✨ Broadcast cancelled due to 30 seconds of inactivity."))
         except asyncio.CancelledError:
             pass
 
@@ -342,15 +367,25 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
+    owner_id = message.from_user.id if message.from_user and is_owner(message.from_user.id) else None
     if message.from_user:
-        await cancel_broadcast_wait(message.from_user.id, notify=True)
+        if owner_id is not None:
+            await cancel_owner_process(owner_id, notify_broadcast=True)
+        else:
+            await cancel_broadcast_wait(message.from_user.id, notify=True)
         register_user(message.from_user.id)
-    await send_start_page(message)
+    panel = await send_start_page(message)
+    if owner_id is not None:
+        await cleanup_owner_ui(owner_id, keep=(panel.chat.id, panel.message_id))
+        await track_owner_ui(owner_id, panel, "panel")
 
 @dp.message(Command("commands"))
 async def commands_handler(message: Message):
     if message.from_user:
-        await cancel_broadcast_wait(message.from_user.id, notify=True)
+        if is_owner(message.from_user.id):
+            await cancel_owner_process(message.from_user.id)
+        else:
+            await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return
     owner_id = message.from_user.id
@@ -366,6 +401,8 @@ async def commands_handler(message: Message):
 
     old_panel = commands_panels.get(owner_id)
     commands_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
+    await cleanup_owner_ui(owner_id, keep=(new_panel.chat.id, new_panel.message_id))
+    await track_owner_ui(owner_id, new_panel, "panel")
 
     # The fresh panel is already visible. Now clean up the command and previous panel.
     try:
@@ -383,7 +420,10 @@ async def commands_handler(message: Message):
 @dp.message(Command("setstart"))
 async def setstart_handler(message: Message):
     if message.from_user:
-        await cancel_broadcast_wait(message.from_user.id, notify=True)
+        if is_owner(message.from_user.id):
+            await cancel_owner_process(message.from_user.id)
+        else:
+            await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("<b>OWNER ACCESS ONLY</b>"))
 
@@ -399,6 +439,8 @@ async def setstart_handler(message: Message):
 
     old_panel = setstart_panels.get(owner_id)
     setstart_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
+    await cleanup_owner_ui(owner_id, keep=(new_panel.chat.id, new_panel.message_id))
+    await track_owner_ui(owner_id, new_panel, "panel")
 
     # Delete the command only after the new panel was successfully sent.
     try:
@@ -451,7 +493,7 @@ async def startcfg_callback(callback: CallbackQuery):
         bot_settings_collection.update_one({"_id": START_SETTINGS_ID},
             {"$set": {"about_enabled": not cfg.get("about_enabled", True)}}, upsert=True)
         await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
-        return await callback.answer("About setting updated.")
+        return await callback.answer("✨ About setting updated.")
 
     if action == "buttons":
         await callback.message.edit_text(start_buttons_text(cfg), reply_markup=start_buttons_keyboard(cfg))
@@ -483,6 +525,8 @@ async def startcfg_callback(callback: CallbackQuery):
         )
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
+        await track_owner_ui(callback.from_user.id, prompt)
         return
 
     if action == "media":
@@ -499,6 +543,8 @@ async def startcfg_callback(callback: CallbackQuery):
         prompt = await callback.message.answer(ui("<i>Only GIFs and images are supported. Send the new start media here.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
+        await track_owner_ui(callback.from_user.id, prompt)
         return
 
     if action == "media_remove":
@@ -521,12 +567,14 @@ async def startcfg_callback(callback: CallbackQuery):
                 {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
             )
             await callback.message.edit_text(start_buttons_text(get_start_settings()), reply_markup=start_buttons_keyboard(get_start_settings()))
-            return await callback.answer(f"Button {idx} disabled.")
+            return await callback.answer(f"✨ Button {idx} disabled.")
         pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_page": "buttons", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
         prompt = await callback.message.answer(ui(f"<i>Send text for Start Message Button {idx}.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
+        await track_owner_ui(callback.from_user.id, prompt)
         return
 
     await callback.answer("Unknown setting.", show_alert=True)
@@ -564,26 +612,51 @@ async def start_back_callback(callback: CallbackQuery):
 @dp.message(Command("add"))
 async def add_handler(message: Message):
     if message.from_user:
-        await cancel_broadcast_wait(message.from_user.id, notify=True)
+        if is_owner(message.from_user.id):
+            await cancel_owner_process(message.from_user.id)
+        else:
+            await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
+    prompt = await message.answer(ui("Send all alternate anime names, separated by commas or new lines. Then send the original post."))
+    await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
+    await track_owner_ui(message.from_user.id, prompt)
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /add command")
     pending[message.from_user.id] = {"stage": "names"}
-    await message.answer(ui("Send all alternate anime names, separated by commas or new lines. Then send the original post."))
 
 @dp.message(Command("show"))
 async def show_handler(message: Message):
     if message.from_user:
-        await cancel_broadcast_wait(message.from_user.id, notify=True)
+        if is_owner(message.from_user.id):
+            await cancel_owner_process(message.from_user.id)
+        else:
+            await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
-        return await message.answer(ui("No anime records have been added yet."))
+        prompt = await message.answer(ui("No anime records have been added yet."))
+        await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
+        await track_owner_ui(message.from_user.id, prompt)
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            log.debug("Could not delete /show command")
+        return
     total_pages = max(1, (len(docs) + 9) // 10)
-    await message.answer(
+    panel = await message.answer(
         ui(f"<b>SAVED ANIME</b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
         reply_markup=anime_list_markup(docs, 0),
     )
+    await cleanup_owner_ui(message.from_user.id, keep=(panel.chat.id, panel.message_id))
+    await track_owner_ui(message.from_user.id, panel, "panel")
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /show command")
 
 @dp.callback_query(F.data.startswith("page:"))
 async def page_callback(callback: CallbackQuery):
@@ -624,40 +697,75 @@ async def anime_detail_callback(callback: CallbackQuery):
 async def replace_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    await cancel_owner_process(callback.from_user.id)
     old_id = callback.data.split(":", 1)[1]
     doc = anime_collection.find_one({"id": old_id}, {"key": 1, "id": 1})
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
     pending[callback.from_user.id] = {"stage": "replace_post", "anime_id": old_id}
-    await callback.message.answer(ui("Send the new original post. The old message ID will be replaced only after the new post is copied successfully."))
+    prompt = await callback.message.answer(ui("Send the new original post. The old message ID will be replaced only after the new post is copied successfully."))
+    await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
+    await track_owner_ui(callback.from_user.id, prompt)
     await callback.answer()
 
 @dp.message(Command("broadcast"))
 async def broadcast_handler(message: Message):
     if message.from_user:
-        await cancel_broadcast_wait(message.from_user.id)
+        if is_owner(message.from_user.id):
+            await cancel_owner_process(message.from_user.id)
+        else:
+            await cancel_broadcast_wait(message.from_user.id)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
     if message.reply_to_message:
         delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
-        return await message.answer(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        result = await message.answer(ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        await cleanup_owner_ui(message.from_user.id, keep=(result.chat.id, result.message_id))
+        await track_owner_ui(message.from_user.id, result)
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            log.debug("Could not delete /broadcast command")
+        return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False)
-    await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
+    prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
+    await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
+    await track_owner_ui(message.from_user.id, prompt)
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /broadcast command")
 
 @dp.message(Command("pbroadcast"))
 async def pin_broadcast_handler(message: Message):
     if message.from_user:
-        await cancel_broadcast_wait(message.from_user.id)
+        if is_owner(message.from_user.id):
+            await cancel_owner_process(message.from_user.id)
+        else:
+            await cancel_broadcast_wait(message.from_user.id)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
     if message.reply_to_message:
         delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
-        return await message.answer(ui(
-            f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
+        result = await message.answer(ui(
+            f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
             f"Pinned: {pinned}. Pin failed: {pin_failed}."
         ))
+        await cleanup_owner_ui(message.from_user.id, keep=(result.chat.id, result.message_id))
+        await track_owner_ui(message.from_user.id, result)
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            log.debug("Could not delete /pbroadcast command")
+        return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True)
-    await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
+    prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
+    await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
+    await track_owner_ui(message.from_user.id, prompt)
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /pbroadcast command")
 
 async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, int, int, int]:
     delivered = failed = pinned = pin_failed = 0
@@ -808,11 +916,11 @@ async def all_messages_handler(message: Message):
                         await message.answer(ui("One or more names already exist. Use /show and Replace to update an existing record."))
                     else:
                         anime_collection.insert_one({"key": session["key"], "id": str(new_id)})
-                        await message.answer(ui("Anime record saved successfully."))
+                        await message.answer(ui("✨ Anime record saved successfully."))
                 else:
                     result = anime_collection.update_one({"id": session["anime_id"]}, {"$set": {"id": str(new_id)}})
                     if result.matched_count:
-                        await message.answer(ui("Replacement saved successfully."))
+                        await message.answer(ui("✨ Replacement saved successfully."))
                     else:
                         await bot.delete_message(DATA_CHANNEL_ID, new_id)
                         await message.answer(ui("Original record was not found; existing data was left unchanged."))
@@ -824,21 +932,26 @@ async def all_messages_handler(message: Message):
             return
 
     if is_owner(user_id) and message.text and message.text.startswith("/"):
-        await cancel_broadcast_wait(user_id, notify=True)
+        await cancel_owner_process(user_id, notify_broadcast=True)
+        await cleanup_owner_ui(user_id)
         return
 
-    if is_owner(user_id) and user_id in pending_broadcast:
+    if is_owner(user_id) and user_id in pending_broadcast and not (message.text or "").startswith("/"):
         session = pending_broadcast.pop(user_id)
         task = session.get("task")
         if task:
             task.cancel()
         delivered, failed, pinned, pin_failed = await broadcast_message(message, pin=session["pin"])
         if session["pin"]:
-            return await message.answer(ui(
-                f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
+            result = await message.answer(ui(
+                f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
                 f"Pinned: {pinned}. Pin failed: {pin_failed}."
             ))
-        return await message.answer(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        else:
+            result = await message.answer(ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        await cleanup_owner_ui(user_id, keep=(result.chat.id, result.message_id))
+        await track_owner_ui(user_id, result)
+        return
 
     if message.text and not message.text.startswith("/"):
         match = find_anime(message.text)
