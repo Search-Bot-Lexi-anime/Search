@@ -172,19 +172,19 @@ def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
 
 def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
     media_on = bool(cfg.get("media_type") and cfg.get("media_file_id"))
-    caption_on = bool((cfg.get("text") or "").strip())
+    caption_on = bool(cfg.get("caption_custom"))
     def status_button(idx: int) -> InlineKeyboardButton:
         enabled = bool((cfg.get(f"button{idx}_text") or "").strip() and
                        (cfg.get(f"button{idx}_url") or "").strip())
-        mark = "🟢" if enabled else "🔴"
+        mark = "✅" if enabled else "❌"
         return InlineKeyboardButton(
             text=f"{mark} {small_caps('button ' + str(idx))}",
             callback_data=f"startcfg:button:{idx}"
         )
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"{'🟢' if caption_on else '🔴'} {small_caps('caption')}", callback_data="startcfg:caption"),
-            InlineKeyboardButton(text=f"{'🟢' if media_on else '🔴'} {small_caps('media')}", callback_data="startcfg:media"),
+            InlineKeyboardButton(text=f"{'✅' if caption_on else '❌'} {small_caps('caption')}", callback_data="startcfg:caption"),
+            InlineKeyboardButton(text=f"{'✅' if media_on else '❌'} {small_caps('media')}", callback_data="startcfg:media"),
         ],
         [status_button(1), status_button(2)],
         [status_button(3), status_button(4)],
@@ -192,8 +192,8 @@ def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
     ])
 
 def start_settings_text(cfg: dict) -> str:
-    caption_state = "🟢" if (cfg.get("text") or "").strip() else "🔴"
-    media_state = "🟢" if cfg.get("media_type") and cfg.get("media_file_id") else "🔴"
+    caption_state = "✅" if cfg.get("caption_custom") else "❌"
+    media_state = "✅" if cfg.get("media_type") and cfg.get("media_file_id") else "❌"
     lines = [
         "<b>START MESSAGE SETTINGS</b>",
         f"{caption_state} <b>CAPTION</b>  {'SET' if caption_state == '🟢' else 'NOT SET'}",
@@ -203,7 +203,7 @@ def start_settings_text(cfg: dict) -> str:
     ]
     for idx in range(1, 5):
         enabled = bool((cfg.get(f"button{idx}_text") or "").strip() and (cfg.get(f"button{idx}_url") or "").strip())
-        lines.append(f"{'🟢' if enabled else '🔴'} <b>BUTTON {idx}</b>  {'ON' if enabled else 'OFF'}")
+        lines.append(f"{'✅' if enabled else '❌'} <b>BUTTON {idx}</b>  {'ON' if enabled else 'OFF'}")
     lines.append("")
     lines.append("<i>Choose a section below to configure your start page.</i>")
     return ui("\n".join(lines))
@@ -608,8 +608,8 @@ async def all_messages_handler(message: Message):
                 ]])
                 await message.reply(
                     ui(
-                        f"<b>ANIME SETTINGS</b>\\n"
-                        f"<b>NAMES</b>\\n{escape(match.get('key', ''))}\\n\\n"
+                        f"<b>ANIME SETTINGS</b>\n"
+                        f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
                         f"<b>MANAGEMENT</b>\nUse the button below to replace the saved post."
                     ),
                     reply_markup=settings_keyboard,
