@@ -72,7 +72,7 @@ def is_owner(user_id: int) -> bool:
 
 def ui(value: str) -> str:
     # Italicize only plain text. Preserve every message that already contains formatting.
-    if re.search(r"</?(?:b|strong|i|em|u|s|strike|code|pre|a|blockquote|tg-spoiler)(?:\\s|>)", value, re.I):
+    if re.search(r"</?(?:b|strong|i|em|u|s|strike|code|pre|a|blockquote|tg-spoiler)(?:\s|>)", value, re.I):
         return value
     return f"<i>{value}</i>"
 
