@@ -193,45 +193,28 @@ def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
                 row.append(InlineKeyboardButton(text=label[:64], url=url))
         if row:
             rows.append(row)
-    rows.append([InlineKeyboardButton(text=small_caps("about"), callback_data="start:about")])
+    if cfg.get("about_enabled", True):
+        rows.append([InlineKeyboardButton(text=small_caps("about"), callback_data="start:about")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
-    media_on = bool(cfg.get("media_type") and cfg.get("media_file_id"))
-    caption_on = bool(cfg.get("caption_custom"))
-    def status_button(idx: int) -> InlineKeyboardButton:
-        enabled = bool((cfg.get(f"button{idx}_text") or "").strip() and
-                       (cfg.get(f"button{idx}_url") or "").strip())
-        mark = "✅" if enabled else "❌"
-        return InlineKeyboardButton(
-            text=f"{mark} {small_caps('button ' + str(idx))}",
-            callback_data=f"startcfg:button:{idx}"
-        )
+    about_on = cfg.get("about_enabled", True)
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=f"{'✅' if caption_on else '❌'} {small_caps('caption')}", callback_data="startcfg:caption"),
-            InlineKeyboardButton(text=f"{'✅' if media_on else '❌'} {small_caps('media')}", callback_data="startcfg:media"),
-        ],
-        [status_button(1), status_button(2)],
-        [status_button(3), status_button(4)],
+        [InlineKeyboardButton(text=small_caps("caption"), callback_data="startcfg:caption"),
+         InlineKeyboardButton(text=small_caps("media"), callback_data="startcfg:media")],
+        [InlineKeyboardButton(text=small_caps("buttons"), callback_data="startcfg:buttons"),
+         InlineKeyboardButton(text=f"{small_caps('about')} {'Enabled ✅' if about_on else 'Disabled ❌'}", callback_data="startcfg:about_toggle")],
     ])
 
 def start_settings_text(cfg: dict) -> str:
     caption_state = "✅" if cfg.get("caption_custom") else "❌"
     media_state = "✅" if cfg.get("media_type") and cfg.get("media_file_id") else "❌"
-    lines = [
-        "<b>START MESSAGE SETTINGS</b>",
-        f"{caption_state} <b>CAPTION</b>  {'SET' if caption_state == '✅' else 'NOT SET'}",
-        f"{media_state} <b>MEDIA</b>  {'SET' if media_state == '✅' else 'NOT SET'}",
-        "",
-        "<b>BUTTON STATUS</b>",
-    ]
-    for idx in range(1, 5):
-        enabled = bool((cfg.get(f"button{idx}_text") or "").strip() and (cfg.get(f"button{idx}_url") or "").strip())
-        lines.append(f"{'✅' if enabled else '❌'} <b>BUTTON {idx}</b>  {'ON' if enabled else 'OFF'}")
-    lines.append("")
-    lines.append("<i>Choose a section below to configure your start page.</i>")
-    return ui("\n".join(lines))
+    about_state = "Enabled ✅" if cfg.get("about_enabled", True) else "Disabled ❌"
+    return ui("<b><u>START MESSAGE</u></b>\n\n"
+              "<i>Customize your bot's start message using the following options.</i>\n\n"
+              f"<i>Caption: {'Added ✅' if caption_state == '✅' else 'Default ✨'}</i>\n"
+              f"<i>Media: {'Added ✅' if media_state == '✅' else 'None ❌'}</i>\n"
+              f"<i>About: {about_state}</i>")
 
 def caption_settings_keyboard(has_caption: bool) -> InlineKeyboardMarkup:
     if has_caption:
@@ -240,10 +223,10 @@ def caption_settings_keyboard(has_caption: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=small_caps("show"), callback_data="startcfg:caption_show"),
         ]]
     else:
-        rows = [[InlineKeyboardButton(text="➕ " + small_caps("add"), callback_data="startcfg:caption_edit")]]
+        rows = [[InlineKeyboardButton(text="✚ " + small_caps("add"), callback_data="startcfg:caption_edit")]]
     rows.extend([
         [InlineKeyboardButton(text=small_caps("default"), callback_data="startcfg:caption_default")],
-        [InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:home")],
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="startcfg:home")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -254,7 +237,7 @@ def media_settings_keyboard(has_media: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=small_caps("remove"), callback_data="startcfg:media_remove"),
         ]]
     else:
-        rows = [[InlineKeyboardButton(text="➕ " + small_caps("add"), callback_data="startcfg:media_edit")]]
+        rows = [[InlineKeyboardButton(text="✚ " + small_caps("add"), callback_data="startcfg:media_edit")]]
     rows.append([InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -351,9 +334,29 @@ async def startcfg_callback(callback: CallbackQuery):
     if action in ("back", "home"):
         return await refresh_start_settings(callback)
 
+    if action == "about_toggle":
+        bot_settings_collection.update_one({"_id": START_SETTINGS_ID},
+            {"$set": {"about_enabled": not cfg.get("about_enabled", True)}}, upsert=True)
+        await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
+        return await callback.answer("About setting updated.")
+
+    if action == "buttons":
+        await callback.message.edit_text(
+            ui("<b><u>START BUTTONS</u></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" +
+               "\n".join(f"<i>Button {i}: {'ON ✅' if cfg.get(f'button{i}_text') and cfg.get(f'button{i}_url') else 'OFF ❌'}</i>" for i in range(1, 5))),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"1 {'ON ✅' if cfg.get('button1_text') and cfg.get('button1_url') else 'OFF ❌'}", callback_data="startcfg:button:1"),
+                 InlineKeyboardButton(text=f"2 {'ON ✅' if cfg.get('button2_text') and cfg.get('button2_url') else 'OFF ❌'}", callback_data="startcfg:button:2")],
+                [InlineKeyboardButton(text=f"3 {'ON ✅' if cfg.get('button3_text') and cfg.get('button3_url') else 'OFF ❌'}", callback_data="startcfg:button:3"),
+                 InlineKeyboardButton(text=f"4 {'ON ✅' if cfg.get('button4_text') and cfg.get('button4_url') else 'OFF ❌'}", callback_data="startcfg:button:4")],
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="startcfg:home")]
+            ])
+        )
+        return await callback.answer()
+
     if action == "caption":
         await callback.message.edit_text(
-            ui(f"<b>CAPTION SETTINGS</b>\n{'✅ CUSTOM CAPTION' if cfg.get('caption_custom') else '❌ DEFAULT CAPTION'}\nChoose an action below."),
+            ui("<b><u>CAPTION</u></b>\n\n<i>Customize your bot's start message Caption.</i>"),
             reply_markup=caption_settings_keyboard(bool(cfg.get("caption_custom")))
         )
         return await callback.answer()
@@ -367,13 +370,13 @@ async def startcfg_callback(callback: CallbackQuery):
             {"_id": START_SETTINGS_ID}, {"$unset": {"text": "", "caption_custom": ""}}
         )
         await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
-        return await callback.answer("Default caption restored.")
+        return await callback.answer("✨ Successfully Restored to default.", show_alert=True)
 
     if action == "caption_edit":
         pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
         prompt = await callback.message.answer(
-            ui("<b>SEND NEW CAPTION</b>\nSend the caption text now. HTML formatting is supported.\n\n" + caption_variables_help())
+            ui("<i>Send The New Caption text.</i>\n\n" + caption_variables_help())
         )
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
@@ -382,7 +385,7 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media":
         has_media = bool(cfg.get("media_type") and cfg.get("media_file_id"))
         await callback.message.edit_text(
-            ui(f"<b>MEDIA SETTINGS</b>\n{'✅ MEDIA SET' if has_media else '❌ NO MEDIA SET'}\nChoose an action below."),
+            ui("<b><u>MEDIA</u></b>\n\n<i>Include an image or GIF with your start message.</i>"),
             reply_markup=media_settings_keyboard(has_media)
         )
         return await callback.answer()
@@ -390,7 +393,7 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media_edit":
         pending[callback.from_user.id] = {"stage": "start_media", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
-        prompt = await callback.message.answer(ui("<b>SEND START MEDIA</b>\nSend one photo or GIF to set it as the start media."))
+        prompt = await callback.message.answer(ui("<i>Only GIFs and images are supported. Send the new start media here.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         return
@@ -401,7 +404,7 @@ async def startcfg_callback(callback: CallbackQuery):
             {"$unset": {"media_type": "", "media_file_id": ""}},
         )
         await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
-        return await callback.answer("Media removed.")
+        return await callback.answer("✨ Successfully removed your bot start poster.", show_alert=True)
 
     if action.startswith("button:"):
         idx = int(action.split(":", 1)[1])
@@ -418,7 +421,7 @@ async def startcfg_callback(callback: CallbackQuery):
             return await callback.answer(f"Button {idx} disabled.")
         pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
-        prompt = await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\nSend the button label."))
+        prompt = await callback.message.answer(ui(f"<i>Send text for Start Message Button {idx}.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         return
@@ -427,6 +430,8 @@ async def startcfg_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "start:about")
 async def start_about_callback(callback: CallbackQuery):
+    if not get_start_settings().get("about_enabled", True):
+        return await callback.answer("About is disabled.", show_alert=True)
     await callback.answer()
     global bot_profile
     if bot_profile is None:
@@ -592,7 +597,7 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await message.reply(ui("<b>CAPTION SAVED</b>\nThe start caption has been updated."))
+            return await message.reply(ui("<i>✨ Successfully Updated New Start Message Caption.</i>"))
 
         if stage == "start_media":
             if message.photo:
@@ -609,7 +614,7 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await message.reply(ui("<b>MEDIA SAVED</b>\nThe start media has been updated."))
+            return await message.reply(ui("<i>✨ Start Message media added successfully.</i>"))
 
         if stage == "start_button_text":
             label = (message.text or "").strip()
@@ -618,7 +623,7 @@ async def all_messages_handler(message: Message):
             session["label"] = label
             session["stage"] = "start_button_url"
             await clear_setup_messages(session, message)
-            prompt = await message.answer(ui("<b>BUTTON LINK</b>\nNow send the URL beginning with https://"))
+            prompt = await message.answer(ui(f"<i>Now send the URL for Start Message Button {session['button']}.</i>"))
             session["prompt_message_id"] = prompt.message_id
             session.setdefault("prompt_message_ids", []).append(prompt.message_id)
             return
@@ -636,7 +641,7 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await message.reply(ui(f"<b>BUTTON {idx} ENABLED</b>\nThe button is saved and active on /start."))
+            return await message.reply(ui(f"<i>✨ Start Message Button {idx} added successfully.</i>"))
 
 
     if is_owner(user_id) and user_id in pending:
