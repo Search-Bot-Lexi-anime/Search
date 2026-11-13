@@ -158,7 +158,7 @@ def get_start_settings() -> dict:
     return {**DEFAULT_START, **saved}
 
 def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=small_caps("about"), callback_data="start:about")]]
+    rows = []
     for first, second in ((1, 2), (3, 4)):
         row = []
         for idx in (first, second):
@@ -168,6 +168,7 @@ def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
                 row.append(InlineKeyboardButton(text=label[:64], url=url))
         if row:
             rows.append(row)
+    rows.append([InlineKeyboardButton(text=small_caps("about"), callback_data="start:about")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
@@ -215,7 +216,7 @@ def caption_settings_keyboard(has_caption: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=small_caps("show"), callback_data="startcfg:caption_show"),
         ]]
     else:
-        rows = [[InlineKeyboardButton(text="➕", callback_data="startcfg:caption_edit")]]
+        rows = [[InlineKeyboardButton(text="➕ " + small_caps("add"), callback_data="startcfg:caption_edit")]]
     rows.extend([
         [InlineKeyboardButton(text=small_caps("default"), callback_data="startcfg:caption_default")],
         [InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:home")],
@@ -229,7 +230,7 @@ def media_settings_keyboard(has_media: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=small_caps("remove"), callback_data="startcfg:media_remove"),
         ]]
     else:
-        rows = [[InlineKeyboardButton(text="➕", callback_data="startcfg:media_edit")]]
+        rows = [[InlineKeyboardButton(text="➕ " + small_caps("add"), callback_data="startcfg:media_edit")]]
     rows.append([InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -292,9 +293,17 @@ async def setstart_handler(message: Message):
     cfg = get_start_settings()
     await message.reply(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
 
-async def refresh_start_settings(callback: CallbackQuery):
+async def refresh_start_settings_message(chat_id: int, message_id: int):
     cfg = get_start_settings()
-    await callback.message.edit_text(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+    await bot.edit_message_text(
+        start_settings_text(cfg),
+        chat_id=chat_id,
+        message_id=message_id,
+        reply_markup=start_settings_keyboard(cfg),
+    )
+
+async def refresh_start_settings(callback: CallbackQuery):
+    await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("startcfg:"))
@@ -323,10 +332,7 @@ async def startcfg_callback(callback: CallbackQuery):
             {"_id": START_SETTINGS_ID}, {"$set": {"text": DEFAULT_CAPTION, "caption_custom": False}}, upsert=True
         )
         await callback.answer("Default caption restored.")
-        return await callback.message.edit_text(
-            ui("<b>CAPTION UPDATED</b>\nDefault caption is now active."),
-            reply_markup=caption_settings_keyboard(False)
-        )
+        return await refresh_start_settings(callback)
 
     if action == "caption_edit":
         pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
@@ -353,10 +359,7 @@ async def startcfg_callback(callback: CallbackQuery):
             upsert=True
         )
         await callback.answer("Media removed.")
-        return await callback.message.edit_text(
-            ui("<b>MEDIA REMOVED</b>"),
-            reply_markup=media_settings_keyboard(False)
-        )
+        return await refresh_start_settings(callback)
 
     if action.startswith("button:"):
         idx = int(action.split(":", 1)[1])
@@ -490,9 +493,7 @@ async def all_messages_handler(message: Message):
 
     async def refresh_start_panel(session):
         try:
-            cfg = get_start_settings()
-            await bot.edit_message_text(start_settings_text(cfg), chat_id=session["settings_chat_id"],
-                                        message_id=session["settings_message_id"], reply_markup=start_settings_keyboard(cfg))
+            await refresh_start_settings_message(session["settings_chat_id"], session["settings_message_id"])
         except Exception:
             log.exception("Could not refresh /setstart panel after saving")
     if is_owner(user_id) and user_id in pending and pending[user_id].get("stage") in (
