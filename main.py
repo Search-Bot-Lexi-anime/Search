@@ -54,6 +54,7 @@ bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 health_app = Flask(__name__)
 runtime_state = {"database": "connecting", "telegram": "starting"}
+commands_panels: dict[int, tuple[int, int]] = {}
 bot_profile = None
 
 @health_app.get("/")
@@ -198,12 +199,11 @@ def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
-    about_on = cfg.get("about_enabled", True)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=small_caps("caption"), callback_data="startcfg:caption"),
          InlineKeyboardButton(text=small_caps("media"), callback_data="startcfg:media")],
         [InlineKeyboardButton(text=small_caps("buttons"), callback_data="startcfg:buttons"),
-         InlineKeyboardButton(text=f"{small_caps('about')} {'Enabled ✅' if about_on else 'Disabled ❌'}", callback_data="startcfg:about_toggle")],
+         InlineKeyboardButton(text=small_caps("about"), callback_data="startcfg:about")],
     ])
 
 def start_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
@@ -317,8 +317,24 @@ async def start_handler(message: Message):
 async def commands_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return
+    owner_id = message.from_user.id
     cfg = get_start_settings()
-    await message.answer(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+
+    # Send the fresh panel first; only after it exists, remove the previous panel and command.
+    new_panel = await message.answer(
+        start_settings_text(cfg),
+        reply_markup=start_settings_keyboard(cfg),
+    )
+
+    old_panel = commands_panels.get(owner_id)
+    commands_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
+
+    if old_panel:
+        try:
+            await bot.delete_message(chat_id=old_panel[0], message_id=old_panel[1])
+        except Exception:
+            log.debug("Could not delete previous /commands panel")
+
     try:
         await message.delete()
     except Exception:
