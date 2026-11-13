@@ -146,7 +146,7 @@ def find_anime(query: str):
 START_SETTINGS_ID = "start_message"
 DEFAULT_START = {
     "_id": START_SETTINGS_ID,
-    "text": "<b>Welcome to Lexi Anime Finder!</b>\n<i>Search your favourite anime by sending its name below.</i>",
+    "text": "<b>Welcome, {mention}!</b>\n<i>I'm {bot_mention}, your anime search companion. Send an anime title or an alternate name to find its saved post.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
     "media_type": None, "media_file_id": None,
     **{f"button{i}_{field}": "" for i in range(1, 5) for field in ("text", "url")},
 }
@@ -156,6 +156,27 @@ DEFAULT_START["caption_custom"] = False
 def get_start_settings() -> dict:
     saved = bot_settings_collection.find_one({"_id": START_SETTINGS_ID}) or {}
     return {**DEFAULT_START, **saved}
+
+async def render_start_text(template: str, user) -> str:
+    me = await bot.get_me()
+    user_name = escape(user.full_name if user else "there")
+    user_id = user.id if user else 0
+    mention = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
+    bot_name = escape(me.full_name)
+    bot_mention = f'<a href="https://t.me/{escape(me.username)}">{bot_name}</a>' if me.username else bot_name
+    anime = '<a href="https://t.me/lexianime">Lexi Anime</a>'
+    for key, value in {
+        "{bot_name}": bot_name, "{bot_mention}": bot_mention,
+        "{user_name}": user_name, "{mention}": mention, "{anime}": anime,
+    }.items():
+        template = template.replace(key, value)
+    return template
+
+def caption_variables_help() -> str:
+    variables = ("{bot_name}", "{bot_mention}", "{user_name}", "{mention}", "{anime}")
+    return "<i>Available variables (tap to copy):</i>\n" + "\n".join(
+        f"<code>{escape(item)}</code>" for item in variables
+    )
 
 def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
     rows = []
@@ -236,7 +257,7 @@ def media_settings_keyboard(has_media: bool) -> InlineKeyboardMarkup:
 
 async def send_start_page(message: Message):
     cfg = get_start_settings()
-    body = cfg.get("text") or DEFAULT_START["text"]
+    body = await render_start_text(cfg.get("text") or DEFAULT_START["text"], message.from_user)
     markup = start_keyboard(cfg)
     media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
     if media_type == "photo" and media_id:
@@ -313,6 +334,16 @@ async def startcfg_callback(callback: CallbackQuery):
     action = callback.data.split(":", 1)[1]
     cfg = get_start_settings()
 
+    session = pending.get(callback.from_user.id)
+    if session and session.get("settings_message_id") == callback.message.message_id:
+        pending.pop(callback.from_user.id, None)
+        for message_id in (session.get("prompt_message_id"), session.get("last_input_message_id")):
+            if message_id:
+                try:
+                    await bot.delete_message(session["settings_chat_id"], message_id)
+                except Exception:
+                    log.debug("Could not clear previous /setstart interaction message")
+
     if action in ("back", "home"):
         return await refresh_start_settings(callback)
 
@@ -329,7 +360,7 @@ async def startcfg_callback(callback: CallbackQuery):
 
     if action == "caption_default":
         bot_settings_collection.update_one(
-            {"_id": START_SETTINGS_ID}, {"$set": {"text": DEFAULT_CAPTION, "caption_custom": False}}, upsert=True
+            {"_id": START_SETTINGS_ID}, {"$unset": {"text": "", "caption_custom": ""}}, upsert=True
         )
         await callback.answer("Default caption restored.")
         return await refresh_start_settings(callback)
@@ -337,7 +368,9 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "caption_edit":
         pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
-        prompt = await callback.message.answer(ui("<b>SEND NEW CAPTION</b>\\nSend the caption text now. HTML formatting is supported."))
+        prompt = await callback.message.answer(
+            ui("<b>SEND NEW CAPTION</b>\nSend the caption text now. HTML formatting is supported.\n\n" + caption_variables_help())
+        )
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         return
 
@@ -359,8 +392,8 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media_remove":
         bot_settings_collection.update_one(
             {"_id": START_SETTINGS_ID},
-            {"$set": {"media_type": None, "media_file_id": None}},
-            upsert=True
+            {"$unset": {"media_type": "", "media_file_id": ""}},
+            upsert=True,
         )
         await callback.answer("Media removed.")
         return await refresh_start_settings(callback)
@@ -374,8 +407,8 @@ async def startcfg_callback(callback: CallbackQuery):
         if label and url:
             bot_settings_collection.update_one(
                 {"_id": START_SETTINGS_ID},
-                {"$set": {f"button{idx}_text": "", f"button{idx}_url": ""}},
-                upsert=True
+                {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
+                upsert=True,
             )
             await callback.answer(f"Button {idx} disabled.")
             return await refresh_start_settings(callback)
@@ -526,6 +559,7 @@ async def all_messages_handler(message: Message):
         "start_caption", "start_media", "start_button_text", "start_button_url"
     ):
         session = pending[user_id]
+        session["last_input_message_id"] = message.message_id
         stage = session["stage"]
         if stage == "start_caption":
             value = message.text or message.caption
