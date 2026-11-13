@@ -55,6 +55,7 @@ dp = Dispatcher()
 health_app = Flask(__name__)
 runtime_state = {"database": "connecting", "telegram": "starting"}
 commands_panels: dict[int, tuple[int, int]] = {}
+setstart_panels: dict[int, tuple[int, int]] = {}
 bot_profile = None
 
 @health_app.get("/")
@@ -348,8 +349,32 @@ async def commands_handler(message: Message):
 async def setstart_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.reply(ui("<b>OWNER ACCESS ONLY</b>"))
+
+    owner_id = message.from_user.id
     cfg = get_start_settings()
-    await message.reply(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+
+    # Always publish the replacement as a fresh, standalone panel first.
+    new_panel = await bot.send_message(
+        chat_id=message.chat.id,
+        text=start_settings_text(cfg),
+        reply_markup=start_settings_keyboard(cfg),
+    )
+
+    old_panel = setstart_panels.get(owner_id)
+    setstart_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
+
+    # Delete the command only after the new panel was successfully sent.
+    try:
+        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    except Exception:
+        log.debug("Could not delete /setstart request")
+
+    # Remove the previous tracked /setstart panel, never unrelated bot messages.
+    if old_panel and old_panel != setstart_panels[owner_id]:
+        try:
+            await bot.delete_message(chat_id=old_panel[0], message_id=old_panel[1])
+        except Exception:
+            log.debug("Could not delete previous /setstart panel")
 
 async def refresh_start_settings_message(chat_id: int, message_id: int):
     cfg = get_start_settings()
