@@ -537,6 +537,7 @@ async def startcfg_callback(callback: CallbackQuery):
         prompt = await callback.message.answer(ui("<i>Only GIFs and images are supported. Send the new start media here.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await track_owner_ui(callback.from_user.id, prompt)
         return
 
     if action == "media_remove":
@@ -565,6 +566,7 @@ async def startcfg_callback(callback: CallbackQuery):
         prompt = await callback.message.answer(ui(f"<i>Send text for Start Message Button {idx}.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await track_owner_ui(callback.from_user.id, prompt)
         return
 
     await callback.answer("Unknown setting.", show_alert=True)
@@ -631,6 +633,10 @@ async def show_handler(message: Message):
         prompt = await message.answer(ui("No anime records have been added yet."))
         await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
         await track_owner_ui(message.from_user.id, prompt)
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            log.debug("Could not delete /show command")
         return
     total_pages = max(1, (len(docs) + 9) // 10)
     panel = await message.answer(
@@ -703,7 +709,14 @@ async def broadcast_handler(message: Message):
         return await message.answer(ui("This command is available to owners only."))
     if message.reply_to_message:
         delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
-        return await message.answer(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        result = await message.answer(ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        await cleanup_owner_ui(message.from_user.id, keep=(result.chat.id, result.message_id))
+        await track_owner_ui(message.from_user.id, result)
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            log.debug("Could not delete /broadcast command")
+        return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False)
     prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
     await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
@@ -724,10 +737,17 @@ async def pin_broadcast_handler(message: Message):
         return await message.answer(ui("This command is available to owners only."))
     if message.reply_to_message:
         delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
-        return await message.answer(ui(
-            f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
+        result = await message.answer(ui(
+            f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
             f"Pinned: {pinned}. Pin failed: {pin_failed}."
         ))
+        await cleanup_owner_ui(message.from_user.id, keep=(result.chat.id, result.message_id))
+        await track_owner_ui(message.from_user.id, result)
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            log.debug("Could not delete /pbroadcast command")
+        return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True)
     prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
     await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
