@@ -289,10 +289,16 @@ async def copy_to_data_channel(message: Message) -> int:
     return copied.message_id
 
 async def deliver_saved(chat_id: int, message_id: int, reply_to: Message | None = None):
+    # Forward the canonical saved post instead of copying it. Telegram preserves
+    # eligible inline keyboards on forwarded bot-authored messages (notably URL
+    # buttons), while copy_message without an explicit reply_markup drops them.
     kwargs = {"chat_id": chat_id, "from_chat_id": DATA_CHANNEL_ID, "message_id": message_id}
     if reply_to is not None:
-        kwargs["reply_parameters"] = ReplyParameters(message_id=reply_to.message_id, allow_sending_without_reply=True)
-    await bot.copy_message(**kwargs)
+        kwargs["reply_parameters"] = ReplyParameters(
+            message_id=reply_to.message_id,
+            allow_sending_without_reply=True,
+        )
+    await bot.forward_message(**kwargs)
 
 def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
     start = page * 10
