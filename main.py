@@ -525,6 +525,7 @@ async def startcfg_callback(callback: CallbackQuery):
         )
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
         await track_owner_ui(callback.from_user.id, prompt)
         return
 
@@ -542,6 +543,7 @@ async def startcfg_callback(callback: CallbackQuery):
         prompt = await callback.message.answer(ui("<i>Only GIFs and images are supported. Send the new start media here.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
         await track_owner_ui(callback.from_user.id, prompt)
         return
 
@@ -571,6 +573,7 @@ async def startcfg_callback(callback: CallbackQuery):
         prompt = await callback.message.answer(ui(f"<i>Send text for Start Message Button {idx}.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
         await track_owner_ui(callback.from_user.id, prompt)
         return
 
@@ -694,12 +697,14 @@ async def anime_detail_callback(callback: CallbackQuery):
 async def replace_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    await cancel_owner_process(callback.from_user.id)
     old_id = callback.data.split(":", 1)[1]
     doc = anime_collection.find_one({"id": old_id}, {"key": 1, "id": 1})
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
     pending[callback.from_user.id] = {"stage": "replace_post", "anime_id": old_id}
     prompt = await callback.message.answer(ui("Send the new original post. The old message ID will be replaced only after the new post is copied successfully."))
+    await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     await track_owner_ui(callback.from_user.id, prompt)
     await callback.answer()
 
