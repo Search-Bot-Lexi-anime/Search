@@ -320,6 +320,7 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
             await asyncio.sleep(30)
             if pending_broadcast.get(user_id) is session:
                 pending_broadcast.pop(user_id, None)
+                await cleanup_owner_ui(user_id)
                 await bot.send_message(chat_id, ui("✨ Broadcast cancelled due to 30 seconds of inactivity."))
         except asyncio.CancelledError:
             pass
@@ -519,6 +520,7 @@ async def startcfg_callback(callback: CallbackQuery):
         )
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
         pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
+        await track_owner_ui(callback.from_user.id, prompt)
         return
 
     if action == "media":
@@ -609,6 +611,10 @@ async def add_handler(message: Message):
     prompt = await message.answer(ui("Send all alternate anime names, separated by commas or new lines. Then send the original post."))
     await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
     await track_owner_ui(message.from_user.id, prompt)
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /add command")
     pending[message.from_user.id] = {"stage": "names"}
 
 @dp.message(Command("show"))
@@ -633,6 +639,10 @@ async def show_handler(message: Message):
     )
     await cleanup_owner_ui(message.from_user.id, keep=(panel.chat.id, panel.message_id))
     await track_owner_ui(message.from_user.id, panel, "panel")
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /show command")
 
 @dp.callback_query(F.data.startswith("page:"))
 async def page_callback(callback: CallbackQuery):
@@ -678,7 +688,8 @@ async def replace_callback(callback: CallbackQuery):
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
     pending[callback.from_user.id] = {"stage": "replace_post", "anime_id": old_id}
-    await callback.message.answer(ui("Send the new original post. The old message ID will be replaced only after the new post is copied successfully."))
+    prompt = await callback.message.answer(ui("Send the new original post. The old message ID will be replaced only after the new post is copied successfully."))
+    await track_owner_ui(callback.from_user.id, prompt)
     await callback.answer()
 
 @dp.message(Command("broadcast"))
@@ -697,6 +708,10 @@ async def broadcast_handler(message: Message):
     prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
     await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
     await track_owner_ui(message.from_user.id, prompt)
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /broadcast command")
 
 @dp.message(Command("pbroadcast"))
 async def pin_broadcast_handler(message: Message):
@@ -717,6 +732,10 @@ async def pin_broadcast_handler(message: Message):
     prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
     await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
     await track_owner_ui(message.from_user.id, prompt)
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /pbroadcast command")
 
 async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, int, int, int]:
     delivered = failed = pinned = pin_failed = 0
