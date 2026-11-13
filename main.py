@@ -71,6 +71,9 @@ def is_owner(user_id: int) -> bool:
     return str(user_id) in OWNER_IDS
 
 def ui(value: str) -> str:
+    # Italicize only plain text. Preserve every message that already contains formatting.
+    if re.search(r"</?(?:b|strong|i|em|u|s|strike|code|pre|a|blockquote|tg-spoiler)(?:\\s|>)", value, re.I):
+        return value
     return f"<i>{value}</i>"
 
 def small_caps(value: str) -> str:
@@ -490,7 +493,7 @@ async def startcfg_callback(callback: CallbackQuery):
         bot_settings_collection.update_one({"_id": START_SETTINGS_ID},
             {"$set": {"about_enabled": not cfg.get("about_enabled", True)}}, upsert=True)
         await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
-        return await callback.answer("About setting updated.")
+        return await callback.answer("✨ About setting updated.")
 
     if action == "buttons":
         await callback.message.edit_text(start_buttons_text(cfg), reply_markup=start_buttons_keyboard(cfg))
@@ -562,7 +565,7 @@ async def startcfg_callback(callback: CallbackQuery):
                 {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
             )
             await callback.message.edit_text(start_buttons_text(get_start_settings()), reply_markup=start_buttons_keyboard(get_start_settings()))
-            return await callback.answer(f"Button {idx} disabled.")
+            return await callback.answer(f"✨ Button {idx} disabled.")
         pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_page": "buttons", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
         prompt = await callback.message.answer(ui(f"<i>Send text for Start Message Button {idx}.</i>"))
