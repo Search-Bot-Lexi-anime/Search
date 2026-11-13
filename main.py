@@ -337,7 +337,9 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "caption_edit":
         pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
-        return await callback.message.answer(ui("<b>SEND NEW CAPTION</b>\nSend the caption text now. HTML formatting is supported."))
+        prompt = await callback.message.answer(ui("<b>SEND NEW CAPTION</b>\\nSend the caption text now. HTML formatting is supported."))
+        pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
+        return
 
     if action == "media":
         has_media = bool(cfg.get("media_type") and cfg.get("media_file_id"))
@@ -350,7 +352,9 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media_edit":
         pending[callback.from_user.id] = {"stage": "start_media", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
-        return await callback.message.answer(ui("<b>SEND START MEDIA</b>\nSend one photo or GIF to set it as the start media."))
+        prompt = await callback.message.answer(ui("<b>SEND START MEDIA</b>\\nSend one photo or GIF to set it as the start media."))
+        pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
+        return
 
     if action == "media_remove":
         bot_settings_collection.update_one(
@@ -377,7 +381,9 @@ async def startcfg_callback(callback: CallbackQuery):
             return await refresh_start_settings(callback)
         pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
-        return await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\nSend the button label."))
+        prompt = await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\\nSend the button label."))
+        pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
+        return
 
     await callback.answer("Unknown setting.", show_alert=True)
 
@@ -491,6 +497,19 @@ async def all_messages_handler(message: Message):
     user_id = message.from_user.id
     register_user(user_id)
 
+    async def clear_setup_messages(session, input_message: Message | None = None):
+        if input_message is not None:
+            try:
+                await input_message.delete()
+            except Exception:
+                log.debug("Could not delete setup input message")
+        prompt_id = session.get("prompt_message_id")
+        if prompt_id:
+            try:
+                await bot.delete_message(session["settings_chat_id"], prompt_id)
+            except Exception:
+                log.debug("Could not delete setup prompt message")
+
     async def refresh_start_panel(session):
         try:
             await refresh_start_settings_message(session["settings_chat_id"], session["settings_message_id"])
@@ -513,6 +532,7 @@ async def all_messages_handler(message: Message):
                 log.exception("Start caption save failed")
                 return await message.reply(ui("<b>SAVE FAILED</b>\nCaption could not be saved."))
             pending.pop(user_id, None)
+            await clear_setup_messages(session, message)
             await refresh_start_panel(session)
             return await message.reply(ui("<b>CAPTION SAVED</b>\nThe start caption has been updated."))
 
@@ -529,6 +549,7 @@ async def all_messages_handler(message: Message):
                 upsert=True
             )
             pending.pop(user_id, None)
+            await clear_setup_messages(session, message)
             await refresh_start_panel(session)
             return await message.reply(ui("<b>MEDIA SAVED</b>\nThe start media has been updated."))
 
@@ -538,7 +559,10 @@ async def all_messages_handler(message: Message):
                 return await message.reply(ui("<b>INVALID BUTTON TEXT</b>\nSend a label between 1 and 64 characters."))
             session["label"] = label
             session["stage"] = "start_button_url"
-            return await message.reply(ui("<b>BUTTON LINK</b>\nNow send the URL beginning with https://"))
+            await clear_setup_messages(session, message)
+            prompt = await message.answer(ui("<b>BUTTON LINK</b>\nNow send the URL beginning with https://"))
+            session["prompt_message_id"] = prompt.message_id
+            return
 
         if stage == "start_button_url":
             url = (message.text or "").strip()
@@ -551,6 +575,7 @@ async def all_messages_handler(message: Message):
                 upsert=True
             )
             pending.pop(user_id, None)
+            await clear_setup_messages(session, message)
             await refresh_start_panel(session)
             return await message.reply(ui(f"<b>BUTTON {idx} ENABLED</b>\nThe button is saved and active on /start."))
 
