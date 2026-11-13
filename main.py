@@ -349,7 +349,7 @@ async def startcfg_callback(callback: CallbackQuery):
 
     if action == "caption":
         await callback.message.edit_text(
-            ui("<b>CAPTION SETTINGS</b>\nChoose an action below."),
+            ui(f"<b>CAPTION SETTINGS</b>\n{'✅ CUSTOM CAPTION' if cfg.get('caption_custom') else '❌ DEFAULT CAPTION'}\nChoose an action below."),
             reply_markup=caption_settings_keyboard(bool(cfg.get("caption_custom")))
         )
         return await callback.answer()
@@ -377,7 +377,7 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media":
         has_media = bool(cfg.get("media_type") and cfg.get("media_file_id"))
         await callback.message.edit_text(
-            ui("<b>MEDIA SETTINGS</b>\nChoose an action below."),
+            ui(f"<b>MEDIA SETTINGS</b>\n{'✅ MEDIA SET' if has_media else '❌ NO MEDIA SET'}\nChoose an action below."),
             reply_markup=media_settings_keyboard(has_media)
         )
         return await callback.answer()
@@ -437,7 +437,8 @@ async def start_about_callback(callback: CallbackQuery):
 async def start_back_callback(callback: CallbackQuery):
     await callback.answer()
     cfg = get_start_settings()
-    body, markup = cfg.get("text") or DEFAULT_START["text"], start_keyboard(cfg)
+    body = await render_start_text(cfg.get("text") or DEFAULT_START["text"], callback.from_user)
+    markup = start_keyboard(cfg)
     if callback.message.photo or callback.message.animation:
         await callback.message.edit_caption(caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     else:
@@ -486,7 +487,7 @@ async def anime_detail_callback(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{message_id}")
     ]])
-    await callback.message.answer(
+    await callback.message.edit_text(
         ui(f"<b>ANIME NAMES</b>\n{escape(doc['key'])}\n\n<b>STATUS</b>\nSaved and ready to replace."),
         reply_markup=keyboard,
     )
