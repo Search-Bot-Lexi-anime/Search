@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters
 from flask import Flask
 from pymongo import MongoClient
 from rapidfuzz import fuzz
@@ -54,6 +54,7 @@ bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 health_app = Flask(__name__)
 runtime_state = {"database": "connecting", "telegram": "starting"}
+bot_profile = None
 
 @health_app.get("/")
 @health_app.get("/health")
@@ -146,7 +147,7 @@ def find_anime(query: str):
 START_SETTINGS_ID = "start_message"
 DEFAULT_START = {
     "_id": START_SETTINGS_ID,
-    "text": "<b>Welcome, {mention}!</b>\n<i>I'm {bot_mention}, your anime search companion. Send an anime title or an alternate name to find its saved post.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
+    "text": "<b><i>Welcome, {mention}!</i></b>\n<i>I'm {bot_mention}, your anime search companion. Send an anime title or an alternate name to find its saved post.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
     "media_type": None, "media_file_id": None,
     **{f"button{i}_{field}": "" for i in range(1, 5) for field in ("text", "url")},
 }
@@ -158,7 +159,10 @@ def get_start_settings() -> dict:
     return {**DEFAULT_START, **saved}
 
 async def render_start_text(template: str, user) -> str:
-    me = await bot.get_me()
+    global bot_profile
+    if bot_profile is None:
+        bot_profile = await bot.get_me()
+    me = bot_profile
     user_name = escape(user.full_name if user else "there")
     user_id = user.id if user else 0
     mention = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
@@ -423,7 +427,10 @@ async def startcfg_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "start:about")
 async def start_about_callback(callback: CallbackQuery):
     await callback.answer()
-    body = about_text(await bot.get_me())
+    global bot_profile
+    if bot_profile is None:
+        bot_profile = await bot.get_me()
+    body = about_text(bot_profile)
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=small_caps("back"), callback_data="start:back")]
     ])
@@ -707,15 +714,25 @@ async def main():
 
     while True:
         try:
+            global bot_profile
             me = await bot.get_me()
+            bot_profile = me
             log.info("Telegram Bot API authenticated as @%s (id=%s)", me.username, me.id)
-            await bot.set_my_commands([
-                BotCommand(command="start", description="Open the bot home"),
-                BotCommand(command="add", description="Add anime record"),
-                BotCommand(command="show", description="Show anime records"),
-                BotCommand(command="broadcast", description="Broadcast a message"),
-                BotCommand(command="setstart", description="Configure Start message"),
-            ])
+            await bot.set_my_commands(
+                [BotCommand(command="start", description=small_caps("Start the adventure ✨"))],
+                scope=BotCommandScopeDefault(),
+            )
+            owner_commands = [
+                BotCommand(command="add", description=small_caps("Add anime record")),
+                BotCommand(command="show", description=small_caps("Show anime records")),
+                BotCommand(command="broadcast", description=small_caps("Broadcast a message")),
+                BotCommand(command="setstart", description=small_caps("Configure start message")),
+            ]
+            for owner_id in OWNER_IDS:
+                await bot.set_my_commands(
+                    [BotCommand(command="start", description=small_caps("Start the adventure ✨")), *owner_commands],
+                    scope=BotCommandScopeChat(chat_id=int(owner_id)),
+                )
             runtime_state["telegram"] = "connected"
             log.info("Aiogram polling starting")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
