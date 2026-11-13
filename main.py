@@ -449,7 +449,7 @@ async def all_messages_handler(message: Message):
                     ui(
                         f"<b>ANIME SETTINGS</b>\\n"
                         f"<b>NAMES</b>\\n{escape(match.get('key', ''))}\\n\\n"
-                        f"<b>SAVED MESSAGE ID</b>\\n<code>{escape(str(match['id']))}</code>"
+                        f"<b>MANAGEMENT</b>\nUse the button below to replace the saved post."
                     ),
                     reply_markup=settings_keyboard,
                 )
@@ -481,6 +481,7 @@ async def main():
             me = await bot.get_me()
             log.info("Telegram Bot API authenticated as @%s (id=%s)", me.username, me.id)
             await bot.set_my_commands([
+                BotCommand(command="start", description="Open the bot home"),
                 BotCommand(command="add", description="Add anime record"),
                 BotCommand(command="show", description="Show anime records"),
                 BotCommand(command="broadcast", description="Broadcast a message"),
