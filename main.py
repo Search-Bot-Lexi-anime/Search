@@ -220,11 +220,11 @@ def start_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
     ])
 
 def start_buttons_text(cfg: dict) -> str:
-    statuses = "\\n".join(
+    statuses = "\n".join(
         f"<i>Button {idx}: {'ON ✅' if cfg.get(f'button{idx}_text') and cfg.get(f'button{idx}_url') else 'OFF ❌'}</i>"
         for idx in range(1, 5)
     )
-    return ui("<b><u>START BUTTONS</u></b>\\n\\n<i>Customize buttons shown with your start message.</i>\\n\\n" + statuses)
+    return ui("<b><u>START BUTTONS</u></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" + statuses)
 
 def start_settings_text(cfg: dict) -> str:
     caption_state = "✅" if cfg.get("caption_custom") else "❌"
@@ -312,6 +312,18 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 async def start_handler(message: Message):
     if message.from_user: register_user(message.from_user.id)
     await send_start_page(message)
+
+@dp.message(Command("commands"))
+async def commands_handler(message: Message):
+    if not message.from_user or not is_owner(message.from_user.id):
+        return
+    cfg = get_start_settings()
+    await message.answer(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+    try:
+        await message.delete()
+    except Exception:
+        log.debug("Could not delete /commands request")
+
 
 @dp.message(Command("setstart"))
 async def setstart_handler(message: Message):
