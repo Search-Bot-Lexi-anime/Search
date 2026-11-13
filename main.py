@@ -13,6 +13,7 @@ from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, Inlin
 from flask import Flask
 from pymongo import MongoClient
 from rapidfuzz import fuzz
+from about import about_text
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("search-bot")
@@ -147,57 +148,103 @@ DEFAULT_START = {
     "_id": START_SETTINGS_ID,
     "text": "<b>Welcome to Lexi Anime Finder!</b>\n<i>Search your favourite anime by sending its name below.</i>",
     "media_type": None, "media_file_id": None,
-    "button1_text": "", "button1_url": "",
-    "button2_text": "", "button2_url": "",
-    "button3_text": "", "button3_url": "",
-    "button4_text": "", "button4_url": "",
+    **{f"button{i}_{field}": "" for i in range(1, 5) for field in ("text", "url")},
 }
+DEFAULT_CAPTION = DEFAULT_START["text"]
 
 def get_start_settings() -> dict:
     saved = bot_settings_collection.find_one({"_id": START_SETTINGS_ID}) or {}
     return {**DEFAULT_START, **saved}
 
 def start_keyboard(cfg: dict) -> InlineKeyboardMarkup:
-    rows = []
-    for idx in range(1, 5):
-        label, url = cfg.get(f"button{idx}_text"), cfg.get(f"button{idx}_url")
-        if label and url and re.match(r"^https?://[^\s]+$", url, re.I):
-            rows.append([InlineKeyboardButton(text=small_caps(label)[:64], url=url)])
-    rows.append([InlineKeyboardButton(text=small_caps("about"), callback_data="start:about")])
+    rows = [[InlineKeyboardButton(text=small_caps("about"), callback_data="start:about")]]
+    for first, second in ((1, 2), (3, 4)):
+        row = []
+        for idx in (first, second):
+            label = (cfg.get(f"button{idx}_text") or "").strip()
+            url = (cfg.get(f"button{idx}_url") or "").strip()
+            if label and re.fullmatch(r"https?://[^\s]+", url, re.I):
+                row.append(InlineKeyboardButton(text=label[:64], url=url))
+        if row:
+            rows.append(row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def start_settings_keyboard() -> InlineKeyboardMarkup:
-    items = [("edit text", "caption"), ("set photo / gif", "media"),
-             ("button 1", "button1"), ("button 2", "button2"),
-             ("button 3", "button3"), ("button 4", "button4"),
-             ("remove media", "remove_media"), ("reset defaults", "reset")]
+def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
+    media_on = bool(cfg.get("media_type") and cfg.get("media_file_id"))
+    caption_on = bool((cfg.get("text") or "").strip())
+    def status_button(idx: int) -> InlineKeyboardButton:
+        enabled = bool((cfg.get(f"button{idx}_text") or "").strip() and
+                       (cfg.get(f"button{idx}_url") or "").strip())
+        mark = "🟢" if enabled else "🔴"
+        return InlineKeyboardButton(
+            text=f"{mark} {small_caps('button ' + str(idx))}",
+            callback_data=f"startcfg:button:{idx}"
+        )
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=small_caps(label), callback_data=f"startcfg:{action}")]
-        for label, action in items
+        [
+            InlineKeyboardButton(text=f"{'🟢' if caption_on else '🔴'} {small_caps('caption')}", callback_data="startcfg:caption"),
+            InlineKeyboardButton(text=f"{'🟢' if media_on else '🔴'} {small_caps('media')}", callback_data="startcfg:media"),
+        ],
+        [status_button(1), status_button(2)],
+        [status_button(3), status_button(4)],
+        [InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:back")],
     ])
 
-def about_text(me) -> str:
-    return ui(
-        "<b>ABOUT LEXI ANIME FINDER</b>\n"
-        "<b>HOW IT WORKS</b>\nFind saved anime posts by title, alternate name, partial name or a small typo.\n\n"
-        "<b>SEARCH NOTES</b>\nSearch is case-insensitive and uses fuzzy matching to help with incomplete or misspelled titles.\n\n"
-        "<b>ABOUT ME</b>\nLexi Anime Finder is made for anime lovers.\n\n"
-        "<b>INFORMATION</b>\n"
-        f"Bot: @{escape(me.username or 'LexiAnimeFinderBot')}\nVersion: 1.0"
-    )
+def start_settings_text(cfg: dict) -> str:
+    caption_state = "🟢" if (cfg.get("text") or "").strip() else "🔴"
+    media_state = "🟢" if cfg.get("media_type") and cfg.get("media_file_id") else "🔴"
+    lines = [
+        "<b>START MESSAGE SETTINGS</b>",
+        f"{caption_state} <b>CAPTION</b>  {'SET' if caption_state == '🟢' else 'NOT SET'}",
+        f"{media_state} <b>MEDIA</b>  {'SET' if media_state == '🟢' else 'NOT SET'}",
+        "",
+        "<b>BUTTON STATUS</b>",
+    ]
+    for idx in range(1, 5):
+        enabled = bool((cfg.get(f"button{idx}_text") or "").strip() and (cfg.get(f"button{idx}_url") or "").strip())
+        lines.append(f"{'🟢' if enabled else '🔴'} <b>BUTTON {idx}</b>  {'ON' if enabled else 'OFF'}")
+    lines.append("")
+    lines.append("<i>Choose a section below to configure your start page.</i>")
+    return ui("\n".join(lines))
+
+def caption_settings_keyboard(has_caption: bool) -> InlineKeyboardMarkup:
+    if has_caption:
+        rows = [[
+            InlineKeyboardButton(text=small_caps("edit"), callback_data="startcfg:caption_edit"),
+            InlineKeyboardButton(text=small_caps("show"), callback_data="startcfg:caption_show"),
+        ]]
+    else:
+        rows = [[InlineKeyboardButton(text="➕", callback_data="startcfg:caption_edit")]]
+    rows.extend([
+        [InlineKeyboardButton(text=small_caps("default"), callback_data="startcfg:caption_default")],
+        [InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:home")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def media_settings_keyboard(has_media: bool) -> InlineKeyboardMarkup:
+    if has_media:
+        rows = [[
+            InlineKeyboardButton(text=small_caps("edit"), callback_data="startcfg:media_edit"),
+            InlineKeyboardButton(text=small_caps("remove"), callback_data="startcfg:media_remove"),
+        ]]
+    else:
+        rows = [[InlineKeyboardButton(text="➕", callback_data="startcfg:media_edit")]]
+    rows.append([InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 async def send_start_page(message: Message):
     cfg = get_start_settings()
-    text = cfg.get("text") or DEFAULT_START["text"]
+    body = cfg.get("text") or DEFAULT_START["text"]
     markup = start_keyboard(cfg)
     media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
     if media_type == "photo" and media_id:
-        await message.answer_photo(media_id, caption=text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await message.answer_photo(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     elif media_type == "animation" and media_id:
-        await message.answer_animation(media_id, caption=text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await message.answer_animation(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     else:
-        await message.answer(text, reply_markup=markup, parse_mode=ParseMode.HTML,
+        await message.answer(body, reply_markup=markup, parse_mode=ParseMode.HTML,
                              link_preview_options={"is_disabled": True})
+
 
 pending: dict[int, dict] = {}
 pending_broadcast: set[int] = set()
@@ -240,48 +287,118 @@ async def start_handler(message: Message):
 @dp.message(Command("setstart"))
 async def setstart_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply(ui("This command is available to owners only."))
-    cfg=get_start_settings()
-    await message.reply(ui("<b>START MESSAGE SETTINGS</b>\\nChoose an item to edit.\\n"
-        f"Current media: {escape(str(cfg.get('media_type') or 'not set'))}\\nAbout layout is built in."),
-        reply_markup=start_settings_keyboard())
+        return await message.reply(ui("<b>OWNER ACCESS ONLY</b>"))
+    cfg = get_start_settings()
+    await message.reply(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+
+async def refresh_start_settings(callback: CallbackQuery):
+    cfg = get_start_settings()
+    await callback.message.edit_text(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("startcfg:"))
 async def startcfg_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
-        return await callback.answer("Owner only.",show_alert=True)
-    action=callback.data.split(":",1)[1]
-    if action=="reset":
-        bot_settings_collection.replace_one({"_id":START_SETTINGS_ID},DEFAULT_START.copy(),upsert=True)
-        await callback.answer("Reset")
-        return await callback.message.edit_text(ui("<b>START SETTINGS RESET</b>"),reply_markup=start_settings_keyboard())
-    if action=="remove_media":
-        bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{"media_type":None,"media_file_id":None}},upsert=True)
-        await callback.answer("Media removed")
-        return await callback.message.edit_text(ui("<b>START MESSAGE SETTINGS</b>\\nMedia removed."),reply_markup=start_settings_keyboard())
-    pending[callback.from_user.id]={"stage":"start_setting","action":action}
-    prompts={"caption":"Send new Start text (HTML supported).","media":"Send a photo or GIF.",
-      "button1":"Send Button Name | https://example.com (or REMOVE).","button2":"Send Button Name | https://example.com (or REMOVE).",
-      "button3":"Send Button Name | https://example.com (or REMOVE).","button4":"Send Button Name | https://example.com (or REMOVE)."}
-    await callback.answer(); await callback.message.answer(ui(prompts[action]))
+        return await callback.answer("Owner only.", show_alert=True)
+    action = callback.data.split(":", 1)[1]
+    cfg = get_start_settings()
 
-@dp.callback_query(F.data=="start:about")
+    if action in ("back", "home"):
+        return await refresh_start_settings(callback)
+
+    if action == "caption":
+        await callback.message.edit_text(
+            ui("<b>CAPTION SETTINGS</b>\nChoose an action below."),
+            reply_markup=caption_settings_keyboard(bool((cfg.get("text") or "").strip()))
+        )
+        return await callback.answer()
+
+    if action == "caption_show":
+        caption = cfg.get("text") or DEFAULT_CAPTION
+        return await callback.answer(caption[:190], show_alert=True)
+
+    if action == "caption_default":
+        bot_settings_collection.update_one(
+            {"_id": START_SETTINGS_ID}, {"$set": {"text": DEFAULT_CAPTION}}, upsert=True
+        )
+        await callback.answer("Default caption restored.")
+        return await callback.message.edit_text(
+            ui("<b>CAPTION UPDATED</b>\nDefault caption is now active."),
+            reply_markup=caption_settings_keyboard(True)
+        )
+
+    if action == "caption_edit":
+        pending[callback.from_user.id] = {"stage": "start_caption"}
+        await callback.answer()
+        return await callback.message.answer(ui("<b>SEND NEW CAPTION</b>\nSend the caption text now. HTML formatting is supported."))
+
+    if action == "media":
+        has_media = bool(cfg.get("media_type") and cfg.get("media_file_id"))
+        await callback.message.edit_text(
+            ui("<b>MEDIA SETTINGS</b>\nChoose an action below."),
+            reply_markup=media_settings_keyboard(has_media)
+        )
+        return await callback.answer()
+
+    if action == "media_edit":
+        pending[callback.from_user.id] = {"stage": "start_media"}
+        await callback.answer()
+        return await callback.message.answer(ui("<b>SEND START MEDIA</b>\nSend one photo or GIF to set it as the start media."))
+
+    if action == "media_remove":
+        bot_settings_collection.update_one(
+            {"_id": START_SETTINGS_ID},
+            {"$set": {"media_type": None, "media_file_id": None}},
+            upsert=True
+        )
+        await callback.answer("Media removed.")
+        return await callback.message.edit_text(
+            ui("<b>MEDIA REMOVED</b>"),
+            reply_markup=media_settings_keyboard(False)
+        )
+
+    if action.startswith("button:"):
+        idx = int(action.split(":", 1)[1])
+        if idx not in (1, 2, 3, 4):
+            return await callback.answer("Invalid button.", show_alert=True)
+        label = (cfg.get(f"button{idx}_text") or "").strip()
+        url = (cfg.get(f"button{idx}_url") or "").strip()
+        if label and url:
+            bot_settings_collection.update_one(
+                {"_id": START_SETTINGS_ID},
+                {"$set": {f"button{idx}_text": "", f"button{idx}_url": ""}},
+                upsert=True
+            )
+            await callback.answer(f"Button {idx} disabled.")
+            return await refresh_start_settings(callback)
+        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx}
+        await callback.answer()
+        return await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\nSend the button label."))
+
+    await callback.answer("Unknown setting.", show_alert=True)
+
+@dp.callback_query(F.data == "start:about")
 async def start_about_callback(callback: CallbackQuery):
-    await callback.answer(); body=about_text(await bot.get_me())
-    markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=small_caps("back"),callback_data="start:back")]])
+    await callback.answer()
+    body = about_text(await bot.get_me())
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=small_caps("back"), callback_data="start:back")]
+    ])
     if callback.message.photo or callback.message.animation:
-        await callback.message.edit_caption(caption=body,reply_markup=markup,parse_mode=ParseMode.HTML)
+        await callback.message.edit_caption(caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     else:
-        await callback.message.edit_text(body,reply_markup=markup,parse_mode=ParseMode.HTML,link_preview_options={"is_disabled":True})
+        await callback.message.edit_text(body, reply_markup=markup, parse_mode=ParseMode.HTML,
+                                         link_preview_options={"is_disabled": True})
 
-@dp.callback_query(F.data=="start:back")
+@dp.callback_query(F.data == "start:back")
 async def start_back_callback(callback: CallbackQuery):
-    await callback.answer(); cfg=get_start_settings()
-    body=cfg.get("text") or DEFAULT_START["text"]; markup=start_keyboard(cfg)
+    await callback.answer()
+    cfg = get_start_settings()
+    body, markup = cfg.get("text") or DEFAULT_START["text"], start_keyboard(cfg)
     if callback.message.photo or callback.message.animation:
-        await callback.message.edit_caption(caption=body,reply_markup=markup,parse_mode=ParseMode.HTML)
+        await callback.message.edit_caption(caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     else:
-        await callback.message.edit_text(body,reply_markup=markup,parse_mode=ParseMode.HTML)
+        await callback.message.edit_text(body, reply_markup=markup, parse_mode=ParseMode.HTML)
 
 @dp.message(Command("add"))
 async def add_handler(message: Message):
@@ -370,28 +487,61 @@ async def all_messages_handler(message: Message):
     user_id = message.from_user.id
     register_user(user_id)
 
-    if is_owner(user_id) and user_id in pending and pending[user_id].get("stage") == "start_setting":
-        session=pending[user_id]; action=session["action"]
-        if action=="caption":
-            value=message.text or message.caption
-            if not value: return await message.reply(ui("Please send Start text."))
-            bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{"text":value}},upsert=True)
-        elif action=="media":
-            if message.photo: mt,mid="photo",message.photo[-1].file_id
-            elif message.animation: mt,mid="animation",message.animation.file_id
-            else: return await message.reply(ui("Please send a photo or GIF."))
-            bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{"media_type":mt,"media_file_id":mid}},upsert=True)
-        elif action.startswith("button"):
-            idx=action[-1]
-            if message.text and message.text.strip().lower() in {"remove","none"}: label,url="",""
-            elif message.text and "|" in message.text:
-                label,url=[x.strip() for x in message.text.split("|",1)]
-                if not label or len(label)>64 or not re.match(r"^https?://[^\s]+$",url,re.I):
-                    return await message.reply(ui("Invalid. Send Button Name | https://example.com"))
-            else: return await message.reply(ui("Send Button Name | https://example.com (or REMOVE)."))
-            bot_settings_collection.update_one({"_id":START_SETTINGS_ID},{"$set":{f"button{idx}_text":label,f"button{idx}_url":url}},upsert=True)
-        pending.pop(user_id,None)
-        return await message.reply(ui("<b>Start settings updated.</b> Use /start to preview."))
+    if is_owner(user_id) and user_id in pending and pending[user_id].get("stage") in (
+        "start_caption", "start_media", "start_button_text", "start_button_url"
+    ):
+        session = pending[user_id]
+        stage = session["stage"]
+        if stage == "start_caption":
+            value = message.text or message.caption
+            if not value:
+                return await message.reply(ui("<b>INVALID CAPTION</b>\nSend text only."))
+            try:
+                await bot_settings_collection.update_one(
+                    {"_id": START_SETTINGS_ID}, {"$set": {"text": value}}, upsert=True
+                )
+            except Exception:
+                log.exception("Start caption save failed")
+                return await message.reply(ui("<b>SAVE FAILED</b>\nCaption could not be saved."))
+            pending.pop(user_id, None)
+            return await message.reply(ui("<b>CAPTION SAVED</b>\nThe start caption has been updated."))
+
+        if stage == "start_media":
+            if message.photo:
+                media_type, media_id = "photo", message.photo[-1].file_id
+            elif message.animation:
+                media_type, media_id = "animation", message.animation.file_id
+            else:
+                return await message.reply(ui("<b>INVALID MEDIA</b>\nPlease send a photo or GIF."))
+            bot_settings_collection.update_one(
+                {"_id": START_SETTINGS_ID},
+                {"$set": {"media_type": media_type, "media_file_id": media_id}},
+                upsert=True
+            )
+            pending.pop(user_id, None)
+            return await message.reply(ui("<b>MEDIA SAVED</b>\nThe start media has been updated."))
+
+        if stage == "start_button_text":
+            label = (message.text or "").strip()
+            if not label or len(label) > 64:
+                return await message.reply(ui("<b>INVALID BUTTON TEXT</b>\nSend a label between 1 and 64 characters."))
+            session["label"] = label
+            session["stage"] = "start_button_url"
+            return await message.reply(ui("<b>BUTTON LINK</b>\nNow send the URL beginning with https://"))
+
+        if stage == "start_button_url":
+            url = (message.text or "").strip()
+            if not re.fullmatch(r"https?://[^\s]+", url, re.I):
+                return await message.reply(ui("<b>INVALID LINK</b>\nSend a valid http:// or https:// URL."))
+            idx, label = session["button"], session["label"]
+            bot_settings_collection.update_one(
+                {"_id": START_SETTINGS_ID},
+                {"$set": {f"button{idx}_text": label, f"button{idx}_url": url}},
+                upsert=True
+            )
+            pending.pop(user_id, None)
+            return await message.reply(ui(f"<b>BUTTON {idx} ENABLED</b>\nThe button is saved and active on /start."))
+
 
     if is_owner(user_id) and user_id in pending:
         session = pending[user_id]
