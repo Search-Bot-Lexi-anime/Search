@@ -206,6 +206,26 @@ def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text=f"{small_caps('about')} {'Enabled ✅' if about_on else 'Disabled ❌'}", callback_data="startcfg:about_toggle")],
     ])
 
+def start_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
+    def button(idx: int) -> InlineKeyboardButton:
+        enabled = bool((cfg.get(f"button{idx}_text") or "").strip() and (cfg.get(f"button{idx}_url") or "").strip())
+        return InlineKeyboardButton(
+            text=small_caps(f"{idx} {'ON ✅' if enabled else 'OFF ❌'}"),
+            callback_data=f"startcfg:button:{idx}",
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [button(1), button(2)],
+        [button(3), button(4)],
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="startcfg:home")],
+    ])
+
+def start_buttons_text(cfg: dict) -> str:
+    statuses = "\\n".join(
+        f"<i>Button {idx}: {'ON ✅' if cfg.get(f'button{idx}_text') and cfg.get(f'button{idx}_url') else 'OFF ❌'}</i>"
+        for idx in range(1, 5)
+    )
+    return ui("<b><u>START BUTTONS</u></b>\\n\\n<i>Customize buttons shown with your start message.</i>\\n\\n" + statuses)
+
 def start_settings_text(cfg: dict) -> str:
     caption_state = "✅" if cfg.get("caption_custom") else "❌"
     media_state = "✅" if cfg.get("media_type") and cfg.get("media_file_id") else "❌"
@@ -341,17 +361,7 @@ async def startcfg_callback(callback: CallbackQuery):
         return await callback.answer("About setting updated.")
 
     if action == "buttons":
-        await callback.message.edit_text(
-            ui("<b><u>START BUTTONS</u></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" +
-               "\n".join(f"<i>Button {i}: {'ON ✅' if cfg.get(f'button{i}_text') and cfg.get(f'button{i}_url') else 'OFF ❌'}</i>" for i in range(1, 5))),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=small_caps(f"1 {'ON ✅' if cfg.get('button1_text') and cfg.get('button1_url') else 'OFF ❌'}"), callback_data="startcfg:button:1"),
-                 InlineKeyboardButton(text=small_caps(f"2 {'ON ✅' if cfg.get('button2_text') and cfg.get('button2_url') else 'OFF ❌'}"), callback_data="startcfg:button:2")],
-                [InlineKeyboardButton(text=small_caps(f"3 {'ON ✅' if cfg.get('button3_text') and cfg.get('button3_url') else 'OFF ❌'}"), callback_data="startcfg:button:3"),
-                 InlineKeyboardButton(text=small_caps(f"4 {'ON ✅' if cfg.get('button4_text') and cfg.get('button4_url') else 'OFF ❌'}"), callback_data="startcfg:button:4")],
-                [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="startcfg:home")]
-            ])
-        )
+        await callback.message.edit_text(start_buttons_text(cfg), reply_markup=start_buttons_keyboard(cfg))
         return await callback.answer()
 
     if action == "caption":
@@ -417,9 +427,9 @@ async def startcfg_callback(callback: CallbackQuery):
                 {"_id": START_SETTINGS_ID},
                 {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
             )
-            await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
+            await callback.message.edit_text(start_buttons_text(get_start_settings()), reply_markup=start_buttons_keyboard(get_start_settings()))
             return await callback.answer(f"Button {idx} disabled.")
-        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
+        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_page": "buttons", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
         prompt = await callback.message.answer(ui(f"<i>Send text for Start Message Button {idx}.</i>"))
         pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
@@ -573,7 +583,12 @@ async def all_messages_handler(message: Message):
 
     async def refresh_start_panel(session):
         try:
-            await refresh_start_settings_message(session["settings_chat_id"], session["settings_message_id"])
+            if session.get("settings_page") == "buttons":
+                cfg_now = get_start_settings()
+                await bot.edit_message_text(start_buttons_text(cfg_now), chat_id=session["settings_chat_id"],
+                    message_id=session["settings_message_id"], reply_markup=start_buttons_keyboard(cfg_now))
+            else:
+                await refresh_start_settings_message(session["settings_chat_id"], session["settings_message_id"])
         except Exception:
             log.exception("Could not refresh /setstart panel after saving")
     if is_owner(user_id) and user_id in pending and pending[user_id].get("stage") in (
