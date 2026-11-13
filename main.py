@@ -325,7 +325,7 @@ async def startcfg_callback(callback: CallbackQuery):
         await callback.answer("Default caption restored.")
         return await callback.message.edit_text(
             ui("<b>CAPTION UPDATED</b>\nDefault caption is now active."),
-            reply_markup=caption_settings_keyboard(True)
+            reply_markup=caption_settings_keyboard(False)
         )
 
     if action == "caption_edit":
