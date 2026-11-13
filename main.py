@@ -196,8 +196,8 @@ def start_settings_text(cfg: dict) -> str:
     media_state = "✅" if cfg.get("media_type") and cfg.get("media_file_id") else "❌"
     lines = [
         "<b>START MESSAGE SETTINGS</b>",
-        f"{caption_state} <b>CAPTION</b>  {'SET' if caption_state == '🟢' else 'NOT SET'}",
-        f"{media_state} <b>MEDIA</b>  {'SET' if media_state == '🟢' else 'NOT SET'}",
+        f"{caption_state} <b>CAPTION</b>  {'SET' if caption_state == '✅' else 'NOT SET'}",
+        f"{media_state} <b>MEDIA</b>  {'SET' if media_state == '✅' else 'NOT SET'}",
         "",
         "<b>BUTTON STATUS</b>",
     ]
