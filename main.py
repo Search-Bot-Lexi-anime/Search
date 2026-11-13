@@ -295,7 +295,7 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
     start = page * 10
     rows = [[InlineKeyboardButton(
         text=small_caps(doc.get("key", "anime").split(",")[0].strip())[:64],
-        callback_data=f"anime:{doc['id']}",
+        callback_data=f"anime:{doc['id']}:{page}",
     )] for doc in docs[start:start + 10]]
     nav = []
     if page > 0:
@@ -465,7 +465,11 @@ async def show_handler(message: Message):
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
         return await message.reply(ui("No anime records have been added yet."))
-    await message.answer(ui(f"<b>SAVED ANIME</b> — {len(docs)} records\nSelect a title to view its details."), reply_markup=anime_list_markup(docs, 0))
+    total_pages = max(1, (len(docs) + 9) // 10)
+    await message.answer(
+        ui(f"<b>SAVED ANIME</b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
+        reply_markup=anime_list_markup(docs, 0),
+    )
 
 @dp.callback_query(F.data.startswith("page:"))
 async def page_callback(callback: CallbackQuery):
@@ -478,7 +482,7 @@ async def page_callback(callback: CallbackQuery):
     start = page * 10
     end = min(start + 10, len(docs))
     await callback.message.edit_text(
-        ui(f"<b>SAVED ANIME</b> — {len(docs)} records\\n<i>Page {page + 1} of {total_pages} · Showing {start + 1 if docs else 0}–{end}</i>\\nSelect a title to view its details."),
+        ui(f"<b>SAVED ANIME</b> — {len(docs)} records\n<i>Page {page + 1} of {total_pages} · Showing {start + 1 if docs else 0}–{end}</i>\nSelect a title to view its details."),
         reply_markup=anime_list_markup(docs, page),
     )
     await callback.answer()
@@ -487,13 +491,15 @@ async def page_callback(callback: CallbackQuery):
 async def anime_detail_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
-    message_id = callback.data.split(":", 1)[1]
+    _, message_id, page_raw = callback.data.split(":", 2)
+    page = int(page_raw)
     doc = anime_collection.find_one({"id": message_id}, {"key": 1, "id": 1})
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{message_id}")
-    ]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{message_id}")],
+        [InlineKeyboardButton(text=small_caps("back"), callback_data=f"page:{page}")],
+    ])
     await callback.message.edit_text(
         ui(f"<b>ANIME NAMES</b>\n{escape(doc['key'])}\n\n<b>STATUS</b>\nSaved and ready to replace."),
         reply_markup=keyboard,
