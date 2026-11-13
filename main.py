@@ -151,6 +151,7 @@ DEFAULT_START = {
     **{f"button{i}_{field}": "" for i in range(1, 5) for field in ("text", "url")},
 }
 DEFAULT_CAPTION = DEFAULT_START["text"]
+DEFAULT_START["caption_custom"] = False
 
 def get_start_settings() -> dict:
     saved = bot_settings_collection.find_one({"_id": START_SETTINGS_ID}) or {}
@@ -309,7 +310,7 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "caption":
         await callback.message.edit_text(
             ui("<b>CAPTION SETTINGS</b>\nChoose an action below."),
-            reply_markup=caption_settings_keyboard(bool((cfg.get("text") or "").strip()))
+            reply_markup=caption_settings_keyboard(bool(cfg.get("caption_custom")))
         )
         return await callback.answer()
 
@@ -319,7 +320,7 @@ async def startcfg_callback(callback: CallbackQuery):
 
     if action == "caption_default":
         bot_settings_collection.update_one(
-            {"_id": START_SETTINGS_ID}, {"$set": {"text": DEFAULT_CAPTION}}, upsert=True
+            {"_id": START_SETTINGS_ID}, {"$set": {"text": DEFAULT_CAPTION, "caption_custom": False}}, upsert=True
         )
         await callback.answer("Default caption restored.")
         return await callback.message.edit_text(
@@ -505,7 +506,7 @@ async def all_messages_handler(message: Message):
                 return await message.reply(ui("<b>INVALID CAPTION</b>\nSend text only."))
             try:
                 await bot_settings_collection.update_one(
-                    {"_id": START_SETTINGS_ID}, {"$set": {"text": value}}, upsert=True
+                    {"_id": START_SETTINGS_ID}, {"$set": {"text": value, "caption_custom": True}}, upsert=True
                 )
             except Exception:
                 log.exception("Start caption save failed")
