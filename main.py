@@ -278,6 +278,7 @@ async def send_start_page(message: Message):
 
 pending: dict[int, dict] = {}
 pending_broadcast: set[int] = set()
+pending_pin_broadcast: set[int] = set()
 
 async def copy_to_data_channel(message: Message) -> int:
     copied = await bot.copy_message(
@@ -602,16 +603,32 @@ async def broadcast_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.reply(ui("This command is available to owners only."))
     if message.reply_to_message:
-        delivered, failed = await broadcast_message(message.reply_to_message)
+        delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
         return await message.reply(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
     pending_broadcast.add(message.from_user.id)
     await message.reply(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied."))
 
-async def broadcast_message(source: Message) -> tuple[int, int]:
-    delivered = failed = 0
+@dp.message(Command("pbroadcast"))
+async def pin_broadcast_handler(message: Message):
+    if not message.from_user or not is_owner(message.from_user.id):
+        return await message.reply(ui("This command is available to owners only."))
+    if message.reply_to_message:
+        delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
+        return await message.reply(ui(
+            f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
+            f"Pinned: {pinned}. Pin failed: {pin_failed}."
+        ))
+    pending_pin_broadcast.add(message.from_user.id)
+    await message.reply(ui(
+        "Now send the message to broadcast and pin in each recipient's chat. "
+        "Messages will still be delivered if pinning is not permitted."
+    ))
+
+async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, int, int, int]:
+    delivered = failed = pinned = pin_failed = 0
     for user_id in get_user_ids():
         try:
-            await bot.copy_message(
+            copied = await bot.copy_message(
                 chat_id=user_id,
                 from_chat_id=source.chat.id,
                 message_id=source.message_id,
@@ -621,7 +638,21 @@ async def broadcast_message(source: Message) -> tuple[int, int]:
         except Exception:
             failed += 1
             log.exception("Broadcast failed for Telegram user %s", user_id)
-    return delivered, failed
+            continue
+
+        if pin:
+            try:
+                await bot.pin_chat_message(
+                    chat_id=user_id,
+                    message_id=copied.message_id,
+                    disable_notification=True,
+                )
+                pinned += 1
+            except Exception:
+                pin_failed += 1
+                log.warning("Broadcast delivered but pin failed for Telegram user %s", user_id, exc_info=True)
+
+    return delivered, failed, pinned, pin_failed
 
 @dp.message()
 async def all_messages_handler(message: Message):
@@ -759,8 +790,16 @@ async def all_messages_handler(message: Message):
 
     if is_owner(user_id) and user_id in pending_broadcast:
         pending_broadcast.discard(user_id)
-        delivered, failed = await broadcast_message(message)
+        delivered, failed, _, _ = await broadcast_message(message)
         return await message.reply(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+
+    if is_owner(user_id) and user_id in pending_pin_broadcast:
+        pending_pin_broadcast.discard(user_id)
+        delivered, failed, pinned, pin_failed = await broadcast_message(message, pin=True)
+        return await message.reply(ui(
+            f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
+            f"Pinned: {pinned}. Pin failed: {pin_failed}."
+        ))
 
     if message.text and not message.text.startswith("/"):
         match = find_anime(message.text)
@@ -818,6 +857,7 @@ async def main():
                 BotCommand(command="add", description=small_caps("Add anime record")),
                 BotCommand(command="show", description=small_caps("Show anime records")),
                 BotCommand(command="broadcast", description=small_caps("Broadcast a message")),
+                BotCommand(command="pbroadcast", description=small_caps("Broadcast and pin a message")),
                 BotCommand(command="setstart", description=small_caps("Configure start message")),
             ]
             for owner_id in OWNER_IDS:
