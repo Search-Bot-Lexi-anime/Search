@@ -203,7 +203,7 @@ def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=small_caps("caption"), callback_data="startcfg:caption"),
          InlineKeyboardButton(text=small_caps("media"), callback_data="startcfg:media")],
         [InlineKeyboardButton(text=small_caps("buttons"), callback_data="startcfg:buttons"),
-         InlineKeyboardButton(text=small_caps("about"), callback_data="startcfg:about")],
+         InlineKeyboardButton(text=small_caps("about"), callback_data="startcfg:about_toggle")],
     ])
 
 def start_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
