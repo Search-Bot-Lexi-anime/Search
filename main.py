@@ -147,7 +147,7 @@ def find_anime(query: str):
 START_SETTINGS_ID = "start_message"
 DEFAULT_START = {
     "_id": START_SETTINGS_ID,
-    "text": "<b><i>Welcome, {mention}!</i></b>\n<i>I'm {bot_mention}, your anime search companion. Send an anime name to find it if it is available.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
+    "text": "<b><i>Welcome, {mention}!</i></b>\n<i>I'm {bot_mention}, your anime search companion. Search an anime name to find it if it is available.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
     "media_type": None, "media_file_id": None,
     **{f"button{i}_{field}": "" for i in range(1, 5) for field in ("text", "url")},
 }
