@@ -366,8 +366,8 @@ async def startcfg_callback(callback: CallbackQuery):
         bot_settings_collection.update_one(
             {"_id": START_SETTINGS_ID}, {"$unset": {"text": "", "caption_custom": ""}}
         )
-        await callback.answer("Default caption restored.")
-        return await refresh_start_settings(callback)
+        await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
+        return await callback.answer("Default caption restored.")
 
     if action == "caption_edit":
         pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
@@ -398,8 +398,8 @@ async def startcfg_callback(callback: CallbackQuery):
             {"_id": START_SETTINGS_ID},
             {"$unset": {"media_type": "", "media_file_id": ""}},
         )
-        await callback.answer("Media removed.")
-        return await refresh_start_settings(callback)
+        await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
+        return await callback.answer("Media removed.")
 
     if action.startswith("button:"):
         idx = int(action.split(":", 1)[1])
@@ -412,8 +412,8 @@ async def startcfg_callback(callback: CallbackQuery):
                 {"_id": START_SETTINGS_ID},
                 {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
             )
-            await callback.answer(f"Button {idx} disabled.")
-            return await refresh_start_settings(callback)
+            await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
+            return await callback.answer(f"Button {idx} disabled.")
         pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id}
         await callback.answer()
         prompt = await callback.message.answer(ui(f"<b>BUTTON {idx} — TEXT</b>\\nSend the button label."))
