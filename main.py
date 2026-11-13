@@ -277,8 +277,32 @@ async def send_start_page(message: Message):
 
 
 pending: dict[int, dict] = {}
-pending_broadcast: set[int] = set()
-pending_pin_broadcast: set[int] = set()
+pending_broadcast: dict[int, dict] = {}
+
+async def cancel_broadcast_wait(user_id: int, notify: bool = False):
+    session = pending_broadcast.pop(user_id, None)
+    if session:
+        task = session.get("task")
+        if task and task is not asyncio.current_task():
+            task.cancel()
+        if notify:
+            await bot.send_message(session["chat_id"], ui("Broadcast cancelled."))
+
+async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
+    await cancel_broadcast_wait(user_id)
+    session = {"chat_id": chat_id, "pin": pin}
+    pending_broadcast[user_id] = session
+
+    async def expire():
+        try:
+            await asyncio.sleep(30)
+            if pending_broadcast.get(user_id) is session:
+                pending_broadcast.pop(user_id, None)
+                await bot.send_message(chat_id, ui("Broadcast cancelled due to 30 seconds of inactivity."))
+        except asyncio.CancelledError:
+            pass
+
+    session["task"] = asyncio.create_task(expire())
 
 async def copy_to_data_channel(message: Message) -> int:
     copied = await bot.copy_message(
@@ -318,11 +342,15 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
-    if message.from_user: register_user(message.from_user.id)
+    if message.from_user:
+        await cancel_broadcast_wait(message.from_user.id, notify=True)
+        register_user(message.from_user.id)
     await send_start_page(message)
 
 @dp.message(Command("commands"))
 async def commands_handler(message: Message):
+    if message.from_user:
+        await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return
     owner_id = message.from_user.id
@@ -354,8 +382,10 @@ async def commands_handler(message: Message):
 
 @dp.message(Command("setstart"))
 async def setstart_handler(message: Message):
+    if message.from_user:
+        await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply(ui("<b>OWNER ACCESS ONLY</b>"))
+        return await message.answer(ui("<b>OWNER ACCESS ONLY</b>"))
 
     owner_id = message.from_user.id
     cfg = get_start_settings()
@@ -533,18 +563,22 @@ async def start_back_callback(callback: CallbackQuery):
 
 @dp.message(Command("add"))
 async def add_handler(message: Message):
+    if message.from_user:
+        await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply(ui("This command is available to owners only."))
+        return await message.answer(ui("This command is available to owners only."))
     pending[message.from_user.id] = {"stage": "names"}
-    await message.reply(ui("Send all alternate anime names, separated by commas or new lines. Then send the original post."))
+    await message.answer(ui("Send all alternate anime names, separated by commas or new lines. Then send the original post."))
 
 @dp.message(Command("show"))
 async def show_handler(message: Message):
+    if message.from_user:
+        await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply(ui("This command is available to owners only."))
+        return await message.answer(ui("This command is available to owners only."))
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
-        return await message.reply(ui("No anime records have been added yet."))
+        return await message.answer(ui("No anime records have been added yet."))
     total_pages = max(1, (len(docs) + 9) // 10)
     await message.answer(
         ui(f"<b>SAVED ANIME</b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
@@ -600,28 +634,32 @@ async def replace_callback(callback: CallbackQuery):
 
 @dp.message(Command("broadcast"))
 async def broadcast_handler(message: Message):
+    if message.from_user:
+        await cancel_broadcast_wait(message.from_user.id)
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply(ui("This command is available to owners only."))
+        return await message.answer(ui("This command is available to owners only."))
     if message.reply_to_message:
         delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
-        return await message.reply(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
-    pending_broadcast.add(message.from_user.id)
-    await message.reply(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied."))
+        return await message.answer(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+    await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False)
+    await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
 
 @dp.message(Command("pbroadcast"))
 async def pin_broadcast_handler(message: Message):
+    if message.from_user:
+        await cancel_broadcast_wait(message.from_user.id)
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply(ui("This command is available to owners only."))
+        return await message.answer(ui("This command is available to owners only."))
     if message.reply_to_message:
         delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
-        return await message.reply(ui(
+        return await message.answer(ui(
             f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
             f"Pinned: {pinned}. Pin failed: {pin_failed}."
         ))
-    pending_pin_broadcast.add(message.from_user.id)
-    await message.reply(ui(
+    await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True)
+    await message.answer(ui(
         "Now send the message to broadcast and pin in each recipient's chat. "
-        "Messages will still be delivered if pinning is not permitted."
+        "Messages will still be delivered if pinning is not permitted. You have 30 seconds."
     ))
 
 async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, int, int, int]:
@@ -694,18 +732,18 @@ async def all_messages_handler(message: Message):
         if stage == "start_caption":
             value = message.text or message.caption
             if not value:
-                return await message.reply(ui("<b>INVALID CAPTION</b>\nSend text only."))
+                return await message.answer(ui("<b>INVALID CAPTION</b>\nSend text only."))
             try:
                 await bot_settings_collection.update_one(
                     {"_id": START_SETTINGS_ID}, {"$set": {"text": value, "caption_custom": True}}, upsert=True
                 )
             except Exception:
                 log.exception("Start caption save failed")
-                return await message.reply(ui("<b>SAVE FAILED</b>\nCaption could not be saved."))
+                return await message.answer(ui("<b>SAVE FAILED</b>\nCaption could not be saved."))
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await message.reply(ui("<i>✨ Successfully Updated New Start Message Caption.</i>"))
+            return await message.answer(ui("<i>✨ Successfully Updated New Start Message Caption.</i>"))
 
         if stage == "start_media":
             if message.photo:
@@ -713,7 +751,7 @@ async def all_messages_handler(message: Message):
             elif message.animation:
                 media_type, media_id = "animation", message.animation.file_id
             else:
-                return await message.reply(ui("<b>INVALID MEDIA</b>\nPlease send a photo or GIF."))
+                return await message.answer(ui("<b>INVALID MEDIA</b>\nPlease send a photo or GIF."))
             bot_settings_collection.update_one(
                 {"_id": START_SETTINGS_ID},
                 {"$set": {"media_type": media_type, "media_file_id": media_id}},
@@ -722,12 +760,12 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await message.reply(ui("<i>✨ Start Message media added successfully.</i>"))
+            return await message.answer(ui("<i>✨ Start Message media added successfully.</i>"))
 
         if stage == "start_button_text":
             label = (message.text or "").strip()
             if not label or len(label) > 64:
-                return await message.reply(ui("<b>INVALID BUTTON TEXT</b>\nSend a label between 1 and 64 characters."))
+                return await message.answer(ui("<b>INVALID BUTTON TEXT</b>\nSend a label between 1 and 64 characters."))
             session["label"] = label
             session["stage"] = "start_button_url"
             await clear_setup_messages(session, message)
@@ -739,7 +777,7 @@ async def all_messages_handler(message: Message):
         if stage == "start_button_url":
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
-                return await message.reply(ui("<b>INVALID LINK</b>\nSend a valid http:// or https:// URL."))
+                return await message.answer(ui("<b>INVALID LINK</b>\nSend a valid http:// or https:// URL."))
             idx, label = session["button"], session["label"]
             bot_settings_collection.update_one(
                 {"_id": START_SETTINGS_ID},
@@ -749,7 +787,7 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await message.reply(ui(f"<i>✨ Start Message Button {idx} added successfully.</i>"))
+            return await message.answer(ui(f"<i>✨ Start Message Button {idx} added successfully.</i>"))
 
 
     if is_owner(user_id) and user_id in pending:
@@ -757,10 +795,10 @@ async def all_messages_handler(message: Message):
         if session["stage"] == "names":
             names = parse_names(message.text or message.caption or "")
             if not names:
-                return await message.reply(ui("Send at least one anime name."))
+                return await message.answer(ui("Send at least one anime name."))
             session["key"] = ", ".join(names)
             session["stage"] = "post"
-            return await message.reply(ui("Names received. Now send the original post with its media and buttons."))
+            return await message.answer(ui("Names received. Now send the original post with its media and buttons."))
         if session["stage"] in ("post", "replace_post"):
             try:
                 new_id = await copy_to_data_channel(message)
@@ -770,36 +808,40 @@ async def all_messages_handler(message: Message):
                         existing_names.update(clean_query(x) for x in record.get("key", "").split(","))
                     if any(clean_query(x) in existing_names for x in session["key"].split(",")):
                         await bot.delete_message(DATA_CHANNEL_ID, new_id)
-                        await message.reply(ui("One or more names already exist. Use /show and Replace to update an existing record."))
+                        await message.answer(ui("One or more names already exist. Use /show and Replace to update an existing record."))
                     else:
                         anime_collection.insert_one({"key": session["key"], "id": str(new_id)})
-                        await message.reply(ui("Anime record saved successfully."))
+                        await message.answer(ui("Anime record saved successfully."))
                 else:
                     result = anime_collection.update_one({"id": session["anime_id"]}, {"$set": {"id": str(new_id)}})
                     if result.matched_count:
-                        await message.reply(ui("Replacement saved successfully."))
+                        await message.answer(ui("Replacement saved successfully."))
                     else:
                         await bot.delete_message(DATA_CHANNEL_ID, new_id)
-                        await message.reply(ui("Original record was not found; existing data was left unchanged."))
+                        await message.answer(ui("Original record was not found; existing data was left unchanged."))
             except Exception:
                 log.exception("Anime post save/replace failed")
-                await message.reply(ui("Could not save the post. The existing database record was not changed."))
+                await message.answer(ui("Could not save the post. The existing database record was not changed."))
             finally:
                 pending.pop(user_id, None)
             return
 
-    if is_owner(user_id) and user_id in pending_broadcast:
-        pending_broadcast.discard(user_id)
-        delivered, failed, _, _ = await broadcast_message(message)
-        return await message.reply(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+    if is_owner(user_id) and message.text and message.text.startswith("/"):
+        await cancel_broadcast_wait(user_id, notify=True)
+        return
 
-    if is_owner(user_id) and user_id in pending_pin_broadcast:
-        pending_pin_broadcast.discard(user_id)
-        delivered, failed, pinned, pin_failed = await broadcast_message(message, pin=True)
-        return await message.reply(ui(
-            f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
-            f"Pinned: {pinned}. Pin failed: {pin_failed}."
-        ))
+    if is_owner(user_id) and user_id in pending_broadcast:
+        session = pending_broadcast.pop(user_id)
+        task = session.get("task")
+        if task:
+            task.cancel()
+        delivered, failed, pinned, pin_failed = await broadcast_message(message, pin=session["pin"])
+        if session["pin"]:
+            return await message.answer(ui(
+                f"Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
+                f"Pinned: {pinned}. Pin failed: {pin_failed}."
+            ))
+        return await message.answer(ui(f"Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
 
     if message.text and not message.text.startswith("/"):
         match = find_anime(message.text)
@@ -812,7 +854,7 @@ async def all_messages_handler(message: Message):
                         callback_data=f"replace:{match['id']}",
                     )
                 ]])
-                await message.reply(
+                await message.answer(
                     ui(
                         f"<b>ANIME SETTINGS</b>\n"
                         f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
@@ -825,7 +867,6 @@ async def all_messages_handler(message: Message):
                 await deliver_saved(
                     chat_id=message.chat.id,
                     message_id=int(match["id"]),
-                    reply_to=message,
                 )
             except Exception:
                 log.exception("Could not deliver saved anime message")
