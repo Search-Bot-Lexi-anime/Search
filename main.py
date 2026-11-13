@@ -657,10 +657,7 @@ async def pin_broadcast_handler(message: Message):
             f"Pinned: {pinned}. Pin failed: {pin_failed}."
         ))
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True)
-    await message.answer(ui(
-        "Now send the message to broadcast and pin in each recipient's chat. "
-        "Messages will still be delivered if pinning is not permitted. You have 30 seconds."
-    ))
+    await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
 
 async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, int, int, int]:
     delivered = failed = pinned = pin_failed = 0
