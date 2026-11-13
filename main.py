@@ -364,7 +364,7 @@ async def startcfg_callback(callback: CallbackQuery):
 
     if action == "caption_default":
         bot_settings_collection.update_one(
-            {"_id": START_SETTINGS_ID}, {"$unset": {"text": "", "caption_custom": ""}}, upsert=True
+            {"_id": START_SETTINGS_ID}, {"$unset": {"text": "", "caption_custom": ""}}
         )
         await callback.answer("Default caption restored.")
         return await refresh_start_settings(callback)
@@ -397,7 +397,6 @@ async def startcfg_callback(callback: CallbackQuery):
         bot_settings_collection.update_one(
             {"_id": START_SETTINGS_ID},
             {"$unset": {"media_type": "", "media_file_id": ""}},
-            upsert=True,
         )
         await callback.answer("Media removed.")
         return await refresh_start_settings(callback)
@@ -412,7 +411,6 @@ async def startcfg_callback(callback: CallbackQuery):
             bot_settings_collection.update_one(
                 {"_id": START_SETTINGS_ID},
                 {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
-                upsert=True,
             )
             await callback.answer(f"Button {idx} disabled.")
             return await refresh_start_settings(callback)
@@ -449,7 +447,8 @@ async def start_back_callback(callback: CallbackQuery):
     if callback.message.photo or callback.message.animation:
         await callback.message.edit_caption(caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     else:
-        await callback.message.edit_text(body, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await callback.message.edit_text(body, reply_markup=markup, parse_mode=ParseMode.HTML,
+                                         link_preview_options={"is_disabled": True})
 
 @dp.message(Command("add"))
 async def add_handler(message: Message):
