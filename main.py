@@ -858,18 +858,14 @@ async def replace_callback(callback: CallbackQuery):
 
 @dp.message(Command("broadcast"))
 async def broadcast_handler(message: Message):
-    if message.from_user:
-        if is_owner(message.from_user.id):
-            await cancel_owner_process(message.from_user.id)
-        else:
-            await cancel_broadcast_wait(message.from_user.id)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
+    previous_session = await begin_owner_command(message.from_user.id)
     if message.reply_to_message:
         delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
         result = await message.answer(ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
-        await cleanup_owner_ui(message.from_user.id, keep=(result.chat.id, result.message_id))
         await track_owner_ui(message.from_user.id, result)
+        await finish_owner_command(message.from_user.id, previous_session, (result.chat.id, result.message_id))
         try:
             await bot.delete_message(message.chat.id, message.message_id)
         except Exception:
@@ -877,8 +873,8 @@ async def broadcast_handler(message: Message):
         return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False)
     prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
-    await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
     await track_owner_ui(message.from_user.id, prompt)
+    await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
@@ -886,21 +882,17 @@ async def broadcast_handler(message: Message):
 
 @dp.message(Command("pbroadcast"))
 async def pin_broadcast_handler(message: Message):
-    if message.from_user:
-        if is_owner(message.from_user.id):
-            await cancel_owner_process(message.from_user.id)
-        else:
-            await cancel_broadcast_wait(message.from_user.id)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
+    previous_session = await begin_owner_command(message.from_user.id)
     if message.reply_to_message:
         delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
         result = await message.answer(ui(
             f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
             f"Pinned: {pinned}. Pin failed: {pin_failed}."
         ))
-        await cleanup_owner_ui(message.from_user.id, keep=(result.chat.id, result.message_id))
         await track_owner_ui(message.from_user.id, result)
+        await finish_owner_command(message.from_user.id, previous_session, (result.chat.id, result.message_id))
         try:
             await bot.delete_message(message.chat.id, message.message_id)
         except Exception:
@@ -908,8 +900,8 @@ async def pin_broadcast_handler(message: Message):
         return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True)
     prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
-    await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
     await track_owner_ui(message.from_user.id, prompt)
+    await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
