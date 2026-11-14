@@ -271,6 +271,7 @@ def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=small_caps("buttons"), callback_data="startcfg:buttons"),
          InlineKeyboardButton(text=small_caps("about"), callback_data="startcfg:about_toggle")],
         [InlineKeyboardButton(text=small_caps("custom button"), callback_data="resultcfg:home")],
+        [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="startcfg:settings_home")],
     ])
 
 def start_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
@@ -648,6 +649,10 @@ async def startcfg_callback(callback: CallbackQuery):
                 await bot.delete_message(session["settings_chat_id"], message_id)
             except Exception:
                 log.debug("Could not clear previous /setstart interaction message")
+
+    if action == "settings_home":
+        await callback.message.edit_text(settings_home_text(), reply_markup=settings_home_keyboard())
+        return await callback.answer()
 
     if action in ("back", "home"):
         return await refresh_start_settings(callback)
