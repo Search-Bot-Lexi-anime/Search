@@ -234,7 +234,7 @@ async def render_start_text(template: str, user) -> str:
     user_id = user.id if user else 0
     mention = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
     bot_name = escape(me.full_name)
-    bot_mention = f'<a href="https://t.me/{escape(me.username)}">{bot_name}</a>' if me.username else bot_name
+    bot_mention = f'<a href="tg://resolve?domain={escape(me.username)}">{bot_name}</a>' if me.username else bot_name
     anime = '<a href="https://t.me/lexianime">Lexi Anime</a>'
     for key, value in {
         "{bot_name}": bot_name, "{bot_mention}": bot_mention,
