@@ -289,14 +289,14 @@ def start_buttons_text(cfg: dict) -> str:
         f"<i>Button {idx}: {'ON ✅' if cfg.get(f'button{idx}_text') and cfg.get(f'button{idx}_url') else 'OFF ❌'}</i>"
         for idx in range(1, 5)
     )
-    return ui("<b><u>START BUTTONS</u></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" + statuses)
+    return ui("<b><i><u>START BUTTONS</u></i></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" + statuses)
 
 def result_buttons_text(cfg: dict) -> str:
     custom_state = "Enabled ✅" if cfg.get("custom_enabled") else "Disabled ❌"
     label = escape(button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT))
     return ("<b><u>CUSTOM BUTTON</u></b>\n\n"
             "<i>Customize Results Post Button Using the buttons below.</i>\n\n"
-            f"<i>Fixed Button: {label}</i>\n"
+            f"<i>Fixed Button: </i>{label}\n"
             f"<i>Custom Button: {custom_state}</i>")
 
 def fixed_button_text(cfg: dict) -> str:
@@ -523,41 +523,7 @@ async def commands_handler(message: Message):
 
 @dp.message(Command("setstart"))
 async def setstart_handler(message: Message):
-    if message.from_user:
-        if is_owner(message.from_user.id):
-            await cancel_owner_process(message.from_user.id)
-        else:
-            await cancel_broadcast_wait(message.from_user.id, notify=True)
-    if not message.from_user or not is_owner(message.from_user.id):
-        return await message.answer(ui("<b>OWNER ACCESS ONLY</b>"))
-
-    owner_id = message.from_user.id
-    cfg = get_start_settings()
-
-    # Always publish the replacement as a fresh, standalone panel first.
-    new_panel = await bot.send_message(
-        chat_id=message.chat.id,
-        text=start_settings_text(cfg),
-        reply_markup=start_settings_keyboard(cfg),
-    )
-
-    old_panel = setstart_panels.get(owner_id)
-    setstart_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
-    await cleanup_owner_ui(owner_id, keep=(new_panel.chat.id, new_panel.message_id))
-    await track_owner_ui(owner_id, new_panel, "panel")
-
-    # Delete the command only after the new panel was successfully sent.
-    try:
-        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
-    except Exception:
-        log.debug("Could not delete /setstart request")
-
-    # Remove the previous tracked /setstart panel, never unrelated bot messages.
-    if old_panel and old_panel != setstart_panels[owner_id]:
-        try:
-            await bot.delete_message(chat_id=old_panel[0], message_id=old_panel[1])
-        except Exception:
-            log.debug("Could not delete previous /setstart panel")
+    await commands_handler(message)
 
 async def refresh_start_settings_message(chat_id: int, message_id: int):
     cfg = get_start_settings()
@@ -605,7 +571,7 @@ async def startcfg_callback(callback: CallbackQuery):
 
     if action == "caption":
         await callback.message.edit_text(
-            ui("<b><u>CAPTION</u></b>\n\n<i>Customize your bot's start message Caption.</i>"),
+            ui("<b><i><u>CAPTION</u></i></b>\n\n<i>Customize your bot's start message Caption.</i>"),
             reply_markup=caption_settings_keyboard(bool(cfg.get("caption_custom")))
         )
         return await callback.answer()
@@ -636,7 +602,7 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media":
         has_media = bool(cfg.get("media_type") and cfg.get("media_file_id"))
         await callback.message.edit_text(
-            ui("<b><u>MEDIA</u></b>\n\n<i>Include an image or GIF with your start message.</i>"),
+            ui("<b><i><u>MEDIA</u></i></b>\n\n<i>Include an image or GIF with your start message.</i>"),
             reply_markup=media_settings_keyboard(has_media)
         )
         return await callback.answer()
@@ -819,7 +785,7 @@ async def show_handler(message: Message):
         return
     total_pages = max(1, (len(docs) + 9) // 10)
     panel = await message.answer(
-        ui(f"<b>SAVED ANIME</b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
+        ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
         reply_markup=anime_list_markup(docs, 0),
     )
     await cleanup_owner_ui(message.from_user.id, keep=(panel.chat.id, panel.message_id))
@@ -841,7 +807,7 @@ async def page_callback(callback: CallbackQuery):
     start = page * 10
     end = min(start + 10, len(docs))
     await callback.message.edit_text(
-        ui(f"<b>SAVED ANIME</b> — {len(docs)} records\n<i>Page {page + 1} of {total_pages} · Showing {start + 1 if docs else 0}–{end}</i>\nSelect a title to view its details."),
+        ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page {page + 1} of {total_pages} · Showing {start + 1 if docs else 0}–{end}</i>\nSelect a title to view its details."),
         reply_markup=anime_list_markup(docs, page),
     )
     await callback.answer()
@@ -861,7 +827,7 @@ async def anime_detail_callback(callback: CallbackQuery):
         [InlineKeyboardButton(text=small_caps("back"), callback_data=f"page:{page}")],
     ])
     await callback.message.edit_text(
-        ui(f"<b>ANIME NAMES</b>\n{escape(doc['key'])}\n\n<b>STATUS</b>\nSaved and ready to replace."),
+        ui(f"<b><i>ANIME NAMES</i></b>\n{escape(doc['key'])}\n\n<b>STATUS</b>\nSaved and ready to replace."),
         reply_markup=keyboard,
     )
     await callback.answer()
@@ -1249,7 +1215,7 @@ async def all_messages_handler(message: Message):
                 ]])
                 await message.answer(
                     ui(
-                        f"<b>ANIME SETTINGS</b>\n"
+                        f"<b><i>ANIME SETTINGS</i></b>\n"
                         f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
                         f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
                     ),
