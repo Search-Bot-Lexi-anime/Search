@@ -750,13 +750,11 @@ async def startcfg_callback(callback: CallbackQuery):
             )
             await callback.message.edit_text(start_buttons_text(get_start_settings()), reply_markup=start_buttons_keyboard(get_start_settings()))
             return await callback.answer(f"✨ Button {idx} disabled.")
-        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_page": "buttons", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
+        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
-        prompt = await bot.send_message(chat_id=callback.message.chat.id, text=ui(f"<i>Send text for Start Message Button {idx}.</i>"))
-        pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
-        pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
-        await track_owner_ui(callback.from_user.id, prompt)
+        await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
+                                f"<i>Send text for Start Message Button {idx}.</i>")
         return
 
     await callback.answer("Unknown setting.", show_alert=True)
@@ -889,8 +887,15 @@ async def show_handler(message: Message):
     previous_session = await begin_owner_command(message.from_user.id)
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
-        prompt = await bot.send_message(chat_id=message.chat.id, text=ui("No anime records have been added yet."))
-        await track_owner_ui(message.from_user.id, prompt)
+        prompt = await bot.send_message(
+            chat_id=message.chat.id,
+            text=ui("<b><i>SAVED ANIME</i></b>\n\n<i>No anime records have been added yet.</i>"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+            ]),
+            link_preview_options={"is_disabled": True},
+        )
+        await track_owner_ui(message.from_user.id, prompt, "panel")
         await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
         try:
             await bot.delete_message(message.chat.id, message.message_id)
@@ -1013,7 +1018,7 @@ async def pin_broadcast_handler(message: Message):
             f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
             f"Pinned: {pinned}. Pin failed: {pin_failed}."
         ))
-        await track_owner_ui(message.from_user.id, result)
+        await track_owner_ui(message.from_user.id, result, "panel")
         await finish_owner_command(message.from_user.id, previous_session, (result.chat.id, result.message_id))
         try:
             await bot.delete_message(message.chat.id, message.message_id)
