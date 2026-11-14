@@ -362,11 +362,11 @@ async def send_start_page(message: Message):
     markup = start_keyboard(cfg)
     media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
     if media_type == "photo" and media_id:
-        return await message.answer_photo(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
+        return await bot.send_photo(chat_id=message.chat.id, photo=media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
     elif media_type == "animation" and media_id:
-        return await message.answer_animation(media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
-    return await message.answer(body, reply_markup=markup, parse_mode=ParseMode.HTML,
-                                link_preview_options={"is_disabled": True})
+        return await bot.send_animation(chat_id=message.chat.id, animation=media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
+    return await bot.send_message(chat_id=message.chat.id, text=body, reply_markup=markup, parse_mode=ParseMode.HTML,
+                                   link_preview_options={"is_disabled": True})
 
 
 pending: dict[int, dict] = {}
@@ -492,6 +492,10 @@ async def start_handler(message: Message):
     if owner_id is not None:
         await track_owner_ui(owner_id, panel, "panel")
         await finish_owner_command(owner_id, previous_session, (panel.chat.id, panel.message_id))
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+        except Exception:
+            log.debug("Could not delete /start request")
 
 @dp.message(Command("settings"))
 @dp.message(Command("commands"))
@@ -776,7 +780,7 @@ async def show_handler(message: Message):
     previous_session = await begin_owner_command(message.from_user.id)
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
-        prompt = await message.answer(ui("No anime records have been added yet."))
+        prompt = await bot.send_message(chat_id=message.chat.id, text=ui("No anime records have been added yet."))
         await track_owner_ui(message.from_user.id, prompt)
         await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
         try:
@@ -785,8 +789,9 @@ async def show_handler(message: Message):
             log.debug("Could not delete /show command")
         return
     total_pages = max(1, (len(docs) + 9) // 10)
-    panel = await message.answer(
-        ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
+    panel = await bot.send_message(
+        chat_id=message.chat.id,
+        text=ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
         reply_markup=anime_list_markup(docs, 0),
     )
     await track_owner_ui(message.from_user.id, panel, "panel")
@@ -864,7 +869,7 @@ async def broadcast_handler(message: Message):
     previous_session = await begin_owner_command(message.from_user.id)
     if message.reply_to_message:
         delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
-        result = await message.answer(ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
+        result = await bot.send_message(chat_id=message.chat.id, text=ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
         await track_owner_ui(message.from_user.id, result)
         await finish_owner_command(message.from_user.id, previous_session, (result.chat.id, result.message_id))
         try:
@@ -873,7 +878,7 @@ async def broadcast_handler(message: Message):
             log.debug("Could not delete /broadcast command")
         return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False)
-    prompt = await message.answer(ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
+    prompt = await bot.send_message(chat_id=message.chat.id, text=ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
     await track_owner_ui(message.from_user.id, prompt)
     await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
     try:
@@ -888,7 +893,7 @@ async def pin_broadcast_handler(message: Message):
     previous_session = await begin_owner_command(message.from_user.id)
     if message.reply_to_message:
         delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
-        result = await message.answer(ui(
+        result = await bot.send_message(chat_id=message.chat.id, text=ui(
             f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
             f"Pinned: {pinned}. Pin failed: {pin_failed}."
         ))
