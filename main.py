@@ -388,6 +388,16 @@ async def cancel_owner_process(user_id: int, notify_broadcast: bool = False):
         await clear_owner_interaction_messages(session)
     await cancel_broadcast_wait(user_id, notify=notify_broadcast)
 
+async def begin_owner_command(user_id: int):
+    session = pending.pop(user_id, None)
+    await cancel_broadcast_wait(user_id)
+    return session
+
+async def finish_owner_command(user_id: int, previous_session: dict | None, keep: tuple[int, int]):
+    if previous_session:
+        await clear_owner_interaction_messages(previous_session)
+    await cleanup_owner_ui(user_id, keep=keep)
+
 async def track_owner_ui(user_id: int, message: Message, kind: str = "prompt"):
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
     state["panels" if kind == "panel" else "prompts"].append((message.chat.id, message.message_id))
@@ -471,28 +481,25 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     owner_id = message.from_user.id if message.from_user and is_owner(message.from_user.id) else None
+    previous_session = None
     if message.from_user:
         if owner_id is not None:
-            await cancel_owner_process(owner_id, notify_broadcast=True)
+            previous_session = await begin_owner_command(owner_id)
         else:
             await cancel_broadcast_wait(message.from_user.id, notify=True)
         register_user(message.from_user.id)
     panel = await send_start_page(message)
     if owner_id is not None:
-        await cleanup_owner_ui(owner_id, keep=(panel.chat.id, panel.message_id))
         await track_owner_ui(owner_id, panel, "panel")
+        await finish_owner_command(owner_id, previous_session, (panel.chat.id, panel.message_id))
 
 @dp.message(Command("settings"))
 @dp.message(Command("commands"))
 async def commands_handler(message: Message):
-    if message.from_user:
-        if is_owner(message.from_user.id):
-            await cancel_owner_process(message.from_user.id)
-        else:
-            await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return
     owner_id = message.from_user.id
+    previous_session = await begin_owner_command(owner_id)
     cfg = get_start_settings()
 
     # Send the fresh panel first; only after it exists, remove the previous panel and command.
@@ -505,8 +512,8 @@ async def commands_handler(message: Message):
 
     old_panel = commands_panels.get(owner_id)
     commands_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
-    await cleanup_owner_ui(owner_id, keep=(new_panel.chat.id, new_panel.message_id))
     await track_owner_ui(owner_id, new_panel, "panel")
+    await finish_owner_command(owner_id, previous_session, (new_panel.chat.id, new_panel.message_id))
 
     # The fresh panel is already visible. Now clean up the command and previous panel.
     try:
@@ -743,13 +750,9 @@ async def start_back_callback(callback: CallbackQuery):
 
 @dp.message(Command("add"))
 async def add_handler(message: Message):
-    if message.from_user:
-        if is_owner(message.from_user.id):
-            await cancel_owner_process(message.from_user.id)
-        else:
-            await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
+    previous_session = await begin_owner_command(message.from_user.id)
     pending[message.from_user.id] = {
         "stage": "names",
         "settings_chat_id": message.chat.id,
@@ -760,7 +763,7 @@ async def add_handler(message: Message):
         message.from_user.id, pending[message.from_user.id],
         "<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"
     )
-    await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
+    await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
@@ -768,18 +771,14 @@ async def add_handler(message: Message):
 
 @dp.message(Command("show"))
 async def show_handler(message: Message):
-    if message.from_user:
-        if is_owner(message.from_user.id):
-            await cancel_owner_process(message.from_user.id)
-        else:
-            await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
+    previous_session = await begin_owner_command(message.from_user.id)
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
         prompt = await message.answer(ui("No anime records have been added yet."))
-        await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
         await track_owner_ui(message.from_user.id, prompt)
+        await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
         try:
             await bot.delete_message(message.chat.id, message.message_id)
         except Exception:
@@ -790,8 +789,8 @@ async def show_handler(message: Message):
         ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
         reply_markup=anime_list_markup(docs, 0),
     )
-    await cleanup_owner_ui(message.from_user.id, keep=(panel.chat.id, panel.message_id))
     await track_owner_ui(message.from_user.id, panel, "panel")
+    await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
