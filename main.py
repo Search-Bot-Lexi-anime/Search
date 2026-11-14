@@ -1361,7 +1361,7 @@ async def all_messages_handler(message: Message):
 
         if stage == "anime_link":
             url = (message.text or "").strip()
-            if not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+            if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
             result = anime_collection.update_one(
                 {"id": session["anime_id"]},
@@ -1373,7 +1373,7 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await edit_owner_panel(
                 session,
-                "<b><u>FIXED LINK SAVED</u></b>\\n\\n<i>This anime's Fixed Button URL has been saved.</i>",
+                "<b><u>FIXED LINK SAVED</u></b>\n\n<i>This anime's Fixed Button URL has been saved.</i>",
                 InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="❮❮ " + small_caps("back to anime"),
