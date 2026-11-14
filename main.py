@@ -1029,10 +1029,6 @@ async def broadcast_handler(message: Message):
         )
         return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False, panel_message_id=panel.message_id)
-    try:
-        await bot.delete_message(message.chat.id, message.message_id)
-    except Exception:
-        log.debug("Could not delete /broadcast command")
 
 @dp.message(Command("pbroadcast"))
 async def pin_broadcast_handler(message: Message):
@@ -1065,10 +1061,6 @@ async def pin_broadcast_handler(message: Message):
         )
         return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True, panel_message_id=panel.message_id)
-    try:
-        await bot.delete_message(message.chat.id, message.message_id)
-    except Exception:
-        log.debug("Could not delete /pbroadcast command")
 
 async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, int, int, int]:
     delivered = failed = pinned = pin_failed = 0
@@ -1106,12 +1098,6 @@ async def all_messages_handler(message: Message):
         return
     user_id = message.from_user.id
     register_user(user_id)
-
-    # Unknown commands must never be consumed as input for an active owner workflow.
-    if is_owner(user_id) and message.text and message.text.startswith("/") and (user_id in pending or user_id in pending_broadcast):
-        await cancel_owner_process(user_id, notify_broadcast=True)
-        await cleanup_owner_ui(user_id)
-        return
 
     async def clear_setup_messages(session, input_message: Message | None = None):
         input_ids = list(session.get("input_message_ids", []))
@@ -1219,10 +1205,6 @@ async def all_messages_handler(message: Message):
             await clear_owner_interaction_messages(session, message)
             pending.pop(user_id, None)
             cfg = get_result_button_settings()
-            await bot.edit_message_text(
-                fixed_button_text(cfg), chat_id=session["settings_chat_id"],
-                message_id=session["settings_message_id"], reply_markup=fixed_button_keyboard()
-            )
             await edit_owner_panel(session, fixed_button_text(cfg), fixed_button_keyboard())
             return
 
@@ -1252,10 +1234,6 @@ async def all_messages_handler(message: Message):
             await clear_owner_interaction_messages(session, message)
             pending.pop(user_id, None)
             cfg = get_result_button_settings()
-            await bot.edit_message_text(
-                result_buttons_text(cfg), chat_id=session["settings_chat_id"],
-                message_id=session["settings_message_id"], reply_markup=result_buttons_keyboard(cfg)
-            )
             await edit_owner_panel(session, result_buttons_text(cfg), result_buttons_keyboard(cfg))
             return
 
