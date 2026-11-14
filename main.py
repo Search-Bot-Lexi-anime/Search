@@ -1073,7 +1073,8 @@ async def all_messages_handler(message: Message):
         session.setdefault("input_message_ids", []).append(message.message_id)
         stage = session["stage"]
         if stage == "start_caption":
-            # Serialize Telegram entities back to HTML so formatting survives MongoDB storage.\n            value = message.html_text or message.html_caption\n            if not value:\n                return await bot.send_message(chat_id=message.chat.id, text=ui("<b>INVALID CAPTION</b>\nSend text only."))
+            # Serialize Telegram entities back to HTML so formatting survives MongoDB storage.
+            value = message.html_text or message.html_caption\n            if not value:\n                return await bot.send_message(chat_id=message.chat.id, text=ui("<b>INVALID CAPTION</b>\nSend text only."))
             try:
                 await bot_settings_collection.update_one(
                     {"_id": START_SETTINGS_ID}, {"$set": {"text": value, "caption_custom": True}}, upsert=True
