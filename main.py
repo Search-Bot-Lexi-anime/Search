@@ -332,7 +332,7 @@ def bot_mention_text() -> str:
 
 
 def settings_home_text() -> str:
-    return (f"<b><u>SETTINGS</u></b> {''}\n\n"
+    return ("<b><u>SETTINGS</u></b>\\n\\n"
             f"✰ Name: {bot_mention_text()}\n\n"
             "<i>Access/Manage Bot using the following options below.</i>")
 def settings_home_keyboard() -> InlineKeyboardMarkup:
