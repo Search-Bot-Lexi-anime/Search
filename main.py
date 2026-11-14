@@ -1440,6 +1440,14 @@ async def all_messages_handler(message: Message):
         if match:
             # Owners receive the management/settings panel instead of the public saved post.
             if is_owner(user_id):
+                try:
+                    await deliver_saved(
+                        chat_id=message.chat.id,
+                        message_id=int(match["id"]),
+                        reply_to=message,
+                    )
+                except Exception:
+                    log.exception("Could not deliver saved anime result to owner")
                 settings_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
                         text=small_caps("replace"),
