@@ -415,8 +415,19 @@ async def cancel_broadcast_wait(user_id: int, notify: bool = False):
         task = session.get("task")
         if task and task is not asyncio.current_task():
             task.cancel()
-        if notify:
-            await bot.send_message(session["chat_id"], ui("❌ Broadcast cancelled."))
+        if notify and session.get("panel_message_id"):
+            try:
+                await bot.edit_message_text(
+                    chat_id=session["chat_id"],
+                    message_id=session["panel_message_id"],
+                    text=ui("❌ Broadcast cancelled."),
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+                    ]),
+                    link_preview_options={"is_disabled": True},
+                )
+            except Exception:
+                log.debug("Could not update cancelled broadcast panel")
 
 async def cancel_owner_process(user_id: int, notify_broadcast: bool = False):
     session = pending.pop(user_id, None)
@@ -451,9 +462,9 @@ async def cleanup_owner_ui(user_id: int, keep: tuple[int, int] | None = None):
         except Exception:
             log.debug("Could not delete previous owner prompt/panel")
 
-async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
+async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool, panel_message_id: int):
     await cancel_owner_process(user_id)
-    session = {"chat_id": chat_id, "pin": pin}
+    session = {"chat_id": chat_id, "pin": pin, "panel_message_id": panel_message_id}
     pending_broadcast[user_id] = session
 
     async def expire():
@@ -461,8 +472,18 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
             await asyncio.sleep(30)
             if pending_broadcast.get(user_id) is session:
                 pending_broadcast.pop(user_id, None)
-                await cleanup_owner_ui(user_id)
-                await bot.send_message(chat_id, ui("❌ Broadcast cancelled due to 30 seconds of inactivity."))
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=panel_message_id,
+                        text=ui("❌ Broadcast cancelled due to 30 seconds of inactivity."),
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+                        ]),
+                        link_preview_options={"is_disabled": True},
+                    )
+                except Exception:
+                    log.debug("Could not update expired broadcast panel")
         except asyncio.CancelledError:
             pass
 
@@ -636,7 +657,7 @@ async def settings_callback(callback: CallbackQuery):
     if action in ("broadcast", "pbroadcast"):
         pin = action == "pbroadcast"
         pending.pop(callback.from_user.id, None)
-        await start_broadcast_wait(callback.from_user.id, chat_id, pin=pin)
+        await start_broadcast_wait(callback.from_user.id, chat_id, pin=pin, panel_message_id=panel_id)
         await callback.message.edit_text(
             ui("<b><i>PIN BROADCAST</i></b>\n\n<i>Send the message to broadcast and pin. You have 30 seconds.</i>" if pin
                else "<b><i>BROADCAST</i></b>\n\n<i>Send the message to broadcast. You have 30 seconds.</i>"),
@@ -982,20 +1003,9 @@ async def broadcast_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     previous_session = await begin_owner_command(message.from_user.id)
-    if message.reply_to_message:
-        delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
-        result = await bot.send_message(chat_id=message.chat.id, text=ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
-        await track_owner_ui(message.from_user.id, result, "panel")
-        await finish_owner_command(message.from_user.id, previous_session, (result.chat.id, result.message_id))
-        try:
-            await bot.delete_message(message.chat.id, message.message_id)
-        except Exception:
-            log.debug("Could not delete /broadcast command")
-        return
-    await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False)
     panel = await bot.send_message(
         chat_id=message.chat.id,
-        text=ui("<b><i>BROADCAST</i></b>\n\nSend the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."),
+        text=ui("<b><i>BROADCAST</i></b>\n\n" + ("Broadcasting replied message..." if message.reply_to_message else "Send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds.")),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
         ]),
@@ -1007,29 +1017,31 @@ async def broadcast_handler(message: Message):
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
         log.debug("Could not delete /broadcast command")
+    if message.reply_to_message:
+        delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
+        await bot.edit_message_text(
+            chat_id=panel.chat.id, message_id=panel.message_id,
+            text=ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+            ]),
+            link_preview_options={"is_disabled": True},
+        )
+        return
+    await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False, panel_message_id=panel.message_id)
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /broadcast command")
 
 @dp.message(Command("pbroadcast"))
 async def pin_broadcast_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     previous_session = await begin_owner_command(message.from_user.id)
-    if message.reply_to_message:
-        delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
-        result = await bot.send_message(chat_id=message.chat.id, text=ui(
-            f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
-            f"Pinned: {pinned}. Pin failed: {pin_failed}."
-        ))
-        await track_owner_ui(message.from_user.id, result, "panel")
-        await finish_owner_command(message.from_user.id, previous_session, (result.chat.id, result.message_id))
-        try:
-            await bot.delete_message(message.chat.id, message.message_id)
-        except Exception:
-            log.debug("Could not delete /pbroadcast command")
-        return
-    await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True)
     panel = await bot.send_message(
         chat_id=message.chat.id,
-        text=ui("<b><i>PIN BROADCAST</i></b>\n\nSend the message to broadcast and pin. Its media, formatting and inline buttons will be copied. You have 30 seconds."),
+        text=ui("<b><i>PIN BROADCAST</i></b>\n\n" + ("Broadcasting and pinning replied message..." if message.reply_to_message else "Send the message to broadcast and pin. Its media, formatting and inline buttons will be copied. You have 30 seconds.")),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
         ]),
@@ -1037,6 +1049,22 @@ async def pin_broadcast_handler(message: Message):
     )
     await track_owner_ui(message.from_user.id, panel, "panel")
     await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        log.debug("Could not delete /pbroadcast command")
+    if message.reply_to_message:
+        delivered, failed, pinned, pin_failed = await broadcast_message(message.reply_to_message, pin=True)
+        await bot.edit_message_text(
+            chat_id=panel.chat.id, message_id=panel.message_id,
+            text=ui(f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. Pinned: {pinned}. Pin failed: {pin_failed}."),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+            ]),
+            link_preview_options={"is_disabled": True},
+        )
+        return
+    await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True, panel_message_id=panel.message_id)
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
@@ -1318,15 +1346,26 @@ async def all_messages_handler(message: Message):
         if task:
             task.cancel()
         delivered, failed, pinned, pin_failed = await broadcast_message(message, pin=session["pin"])
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+        except Exception:
+            log.debug("Could not delete broadcast input message")
         if session["pin"]:
-            result = await bot.send_message(chat_id=message.chat.id, text=ui(
+            result_text = (
                 f"✨ Pin broadcast complete. Delivered: {delivered}. Delivery failed: {failed}. "
                 f"Pinned: {pinned}. Pin failed: {pin_failed}."
-            ))
+            )
         else:
-            result = await bot.send_message(chat_id=message.chat.id, text=ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
-        await cleanup_owner_ui(user_id, keep=(result.chat.id, result.message_id))
-        await track_owner_ui(user_id, result)
+            result_text = f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."
+        await bot.edit_message_text(
+            chat_id=session["chat_id"],
+            message_id=session["panel_message_id"],
+            text=ui(result_text),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+            ]),
+            link_preview_options={"is_disabled": True},
+        )
         return
 
     if message.text and not message.text.startswith("/"):
