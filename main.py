@@ -686,7 +686,7 @@ async def ensure_canonical_fixed_buttons():
     failed = False
     for doc in docs:
         url = (doc.get("link") or "").strip()
-        if not url or not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+        if not url or not re.fullmatch(r"https?://[^\s]+", url, re.I):
             continue
         try:
             await bot.edit_message_reply_markup(
