@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import signal
 import threading
 from html import escape, unescape
 
@@ -1859,8 +1860,28 @@ async def all_messages_handler(message: Message):
                 log.exception("Could not deliver saved anime message")
 
 async def main():
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    async def stop_polling_safely():
+        try:
+            await dp.stop_polling()
+        except RuntimeError:
+            # Polling may not have started yet when Render sends SIGTERM.
+            pass
+
+    def request_shutdown():
+        shutdown_event.set()
+        loop.create_task(stop_polling_safely())
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, request_shutdown)
+        except NotImplementedError:
+            pass
+
     log.info("Search bot process started; waiting for MongoDB connection")
-    while True:
+    while not shutdown_event.is_set():
         try:
             await asyncio.to_thread(mongo.admin.command, "ping")
             await asyncio.to_thread(migrate_legacy_users)
@@ -1872,12 +1893,17 @@ async def main():
         except Exception:
             runtime_state["database"] = "connecting"
             log.exception("MongoDB connection failed; retrying in 15 seconds")
-            await asyncio.sleep(15)
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
 
-    while True:
+    while not shutdown_event.is_set():
         try:
             global bot_profile
             me = await bot.get_me()
+            if shutdown_event.is_set():
+                break
             bot_profile = me
             log.info("Telegram Bot API authenticated as @%s (id=%s)", me.username, me.id)
             await bot.set_my_commands(
@@ -1892,21 +1918,44 @@ async def main():
                 BotCommand(command="pbroadcast", description=small_caps("Broadcast and pin a message")),
             ]
             for owner_id in OWNER_IDS:
+                if shutdown_event.is_set():
+                    break
                 await bot.set_my_commands(
                     [BotCommand(command="start", description=small_caps("Start the adventure ✨")), *owner_commands],
                     scope=BotCommandScopeChat(chat_id=int(owner_id)),
                 )
+            if shutdown_event.is_set():
+                break
             await ensure_canonical_fixed_buttons()
+            if shutdown_event.is_set():
+                break
             runtime_state["telegram"] = "connected"
             log.info("Aiogram polling starting")
-            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+            await dp.start_polling(
+                bot,
+                allowed_updates=dp.resolve_used_update_types(),
+                handle_signals=False,
+            )
+            if shutdown_event.is_set():
+                break
             runtime_state["telegram"] = "reconnecting"
             log.warning("Aiogram polling returned; restarting polling in 3 seconds")
-            await asyncio.sleep(3)
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                pass
         except Exception:
+            if shutdown_event.is_set():
+                break
             runtime_state["telegram"] = "reconnecting"
             log.exception("Telegram startup/polling failed; retrying in 15 seconds")
-            await asyncio.sleep(15)
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+
+    runtime_state["telegram"] = "stopping"
+    await bot.session.close()
 
 threading.Thread(target=run_health_server, daemon=True).start()
 
