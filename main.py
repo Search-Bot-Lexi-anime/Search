@@ -297,7 +297,7 @@ def start_buttons_text(cfg: dict) -> str:
 def result_buttons_text(cfg: dict) -> str:
     custom_state = "Enabled ✅" if cfg.get("custom_enabled") else "Disabled ❌"
     label = escape(button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT))
-    return ("<b><u>CUSTOM BUTTON</u></b>\n\n"
+    return ("<b><u>BUTTONS</u></b>\n\n"
             "<i>Customize Results Post Button Using the buttons below.</i>\n\n"
             f"<i>Fixed Button: </i>{label}\n"
             f"<i>Custom Button: {custom_state}</i>")
@@ -339,7 +339,7 @@ def settings_home_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=small_caps("start message"), callback_data="settings:start"),
          InlineKeyboardButton(text=small_caps("buttons"), callback_data="settings:results")],
         [InlineKeyboardButton(text=small_caps("broadcast"), callback_data="settings:broadcast"),
-         InlineKeyboardButton(text=small_caps("p broadcast"), callback_data="settings:pbroadcast")],
+         InlineKeyboardButton(text=small_caps("p-broadcast"), callback_data="settings:pbroadcast")],
     ])
 
 def start_settings_text(cfg: dict) -> str:
@@ -1345,10 +1345,9 @@ async def main():
                 scope=BotCommandScopeDefault(),
             )
             owner_commands = [
+                BotCommand(command="settings", description=small_caps("Open bot settings")),
                 BotCommand(command="add", description=small_caps("Add anime record")),
                 BotCommand(command="show", description=small_caps("Show anime records")),
-                BotCommand(command="settings", description=small_caps("Open bot settings")),
-                BotCommand(command="commands", description=small_caps("Open bot settings")),
                 BotCommand(command="broadcast", description=small_caps("Broadcast a message")),
                 BotCommand(command="pbroadcast", description=small_caps("Broadcast and pin a message")),
             ]
