@@ -328,18 +328,18 @@ def settings_home_text() -> str:
     anime_count = anime_collection.count_documents({})
     users_count = len(get_user_ids())
     return ("<b><i>BOT SETTINGS</i></b>\n\n"
-            "<i>Manage all bot features from this panel.</i>\n\n"
+            "<i>Access/Manage Bot using the following options below.</i>\n\n"
             f"<i>Saved Anime: {anime_count}</i>\n"
             f"<i>Users: {users_count}</i>")
 
 def settings_home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✚ " + small_caps("add anime"), callback_data="settings:add"),
-         InlineKeyboardButton(text=small_caps("show anime"), callback_data="settings:show")],
+        [InlineKeyboardButton(text="✚ " + small_caps("add ✚"), callback_data="settings:add"),
+         InlineKeyboardButton(text=small_caps("show added"), callback_data="settings:show")],
         [InlineKeyboardButton(text=small_caps("start message"), callback_data="settings:start"),
-         InlineKeyboardButton(text=small_caps("result buttons"), callback_data="settings:results")],
+         InlineKeyboardButton(text=small_caps("buttons"), callback_data="settings:results")],
         [InlineKeyboardButton(text=small_caps("broadcast"), callback_data="settings:broadcast"),
-         InlineKeyboardButton(text=small_caps("pin broadcast"), callback_data="settings:pbroadcast")],
+         InlineKeyboardButton(text=small_caps("p broadcast"), callback_data="settings:pbroadcast")],
     ])
 
 def start_settings_text(cfg: dict) -> str:
@@ -347,7 +347,7 @@ def start_settings_text(cfg: dict) -> str:
     media_state = "Added ✅" if cfg.get("media_type") and cfg.get("media_file_id") else "None ❌"
     about_state = "Enabled ✅" if cfg.get("about_enabled", True) else "Disabled ❌"
     return ("<b><i>START MESSAGE</i></b>\n\n"
-            "<i>Customize your bot's start message using the following options.</i>\n\n"
+            "<i>Customize start message using the following options below.</i>\n\n"
             f"<i>Caption: {caption_state}</i>\n"
             f"<i>Media: {media_state}</i>\n"
             f"<i>About: {about_state}</i>")
@@ -401,7 +401,7 @@ async def cancel_broadcast_wait(user_id: int, notify: bool = False):
         if task and task is not asyncio.current_task():
             task.cancel()
         if notify:
-            await bot.send_message(session["chat_id"], ui("✨ Broadcast cancelled."))
+            await bot.send_message(session["chat_id"], ui("❌ Broadcast cancelled."))
 
 async def cancel_owner_process(user_id: int, notify_broadcast: bool = False):
     session = pending.pop(user_id, None)
@@ -447,7 +447,7 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
             if pending_broadcast.get(user_id) is session:
                 pending_broadcast.pop(user_id, None)
                 await cleanup_owner_ui(user_id)
-                await bot.send_message(chat_id, ui("✨ Broadcast cancelled due to 30 seconds of inactivity."))
+                await bot.send_message(chat_id, ui("❌ Broadcast cancelled due to 30 seconds of inactivity."))
         except asyncio.CancelledError:
             pass
 
