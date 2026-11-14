@@ -290,6 +290,8 @@ async def send_owner_prompt(user_id: int, session: dict, text: str) -> Message:
     return prompt
 
 async def delete_pending_data_post(session: dict):
+    if session.get("committing"):
+        return
     message_id = session.get("new_id")
     if not message_id:
         return
@@ -1642,6 +1644,7 @@ async def all_messages_handler(message: Message):
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link for the Fixed Button.</i>")
             new_message_id = int(session["new_id"])
+            session["committing"] = True
             try:
                 fixed_cfg = await asyncio.to_thread(get_result_button_settings)
                 label = button_label_text(fixed_cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
@@ -1652,6 +1655,10 @@ async def all_messages_handler(message: Message):
                         [InlineKeyboardButton(text=label, url=url)]
                     ]),
                 )
+                if pending.get(user_id) is not session:
+                    session["committing"] = False
+                    await delete_pending_data_post(session)
+                    return
                 if stage == "fixed_url":
                     await asyncio.to_thread(
                         anime_collection.insert_one,
@@ -1672,18 +1679,31 @@ async def all_messages_handler(message: Message):
                         raise RuntimeError("Anime record to replace was not found")
                     success_text = "✨ Replacement saved successfully."
             except Exception:
+                session["committing"] = False
                 log.exception("Anime post/fixed button save failed before database commit")
                 await delete_pending_data_post(session)
                 await clear_owner_interaction_messages(session, message)
-                pending.pop(user_id, None)
-                await edit_owner_panel(session, "<i>Could not save the post and Fixed Button. The existing record was left unchanged.</i>")
+                if pending.get(user_id) is session:
+                    pending.pop(user_id, None)
+                    try:
+                        await edit_owner_panel(session, "<i>Could not save the post and Fixed Button. The existing record was left unchanged.</i>")
+                    except Exception:
+                        log.exception("Could not refresh owner panel after failed anime save")
                 return
 
+            session["committing"] = False
             # The database now points to the new canonical post. Never delete it because
-            # a later UI edit failed; that would leave a broken record.
+            # a later UI edit failed or the owner cancelled while the database write ran.
             old_anime_id = session.get("anime_id") if stage == "replace_fixed_url" else None
-            pending.pop(user_id, None)
             session.pop("new_id", None)
+            if pending.get(user_id) is not session:
+                if old_anime_id:
+                    try:
+                        await bot.delete_message(DATA_CHANNEL_ID, int(old_anime_id))
+                    except Exception:
+                        log.debug("Could not delete replaced canonical post after successful replacement")
+                return
+            pending.pop(user_id, None)
             await clear_owner_interaction_messages(session, message)
             if old_anime_id:
                 try:
