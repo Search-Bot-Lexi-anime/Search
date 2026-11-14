@@ -7,7 +7,7 @@ def about_text(me) -> str:
     username = getattr(me, "username", None)
 
     bot_link = (
-        f'<a href="https://t.me/{escape(str(username))}">{full_name}</a>'
+        f'<a href="tg://resolve?domain={escape(str(username))}">{full_name}</a>'
         if username
         else full_name
     )
