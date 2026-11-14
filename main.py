@@ -780,14 +780,21 @@ async def add_handler(message: Message):
             await cancel_broadcast_wait(message.from_user.id, notify=True)
     if not message.from_user or not is_owner(message.from_user.id):
         return await message.answer(ui("This command is available to owners only."))
-    prompt = await message.answer(ui("Send all alternate anime names, separated by commas or new lines. Then send the original post."))
+    pending[message.from_user.id] = {
+        "stage": "names",
+        "settings_chat_id": message.chat.id,
+        "input_message_ids": [],
+        "prompt_message_ids": [],
+    }
+    prompt = await send_owner_prompt(
+        message.from_user.id, pending[message.from_user.id],
+        "<b><i>ADD ANIME</i></b>\\n\\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"
+    )
     await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
-    await track_owner_ui(message.from_user.id, prompt)
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
         log.debug("Could not delete /add command")
-    pending[message.from_user.id] = {"stage": "names"}
 
 @dp.message(Command("show"))
 async def show_handler(message: Message):
@@ -824,6 +831,7 @@ async def show_handler(message: Message):
 async def page_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     page = int(callback.data.split(":", 1)[1])
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     total_pages = max(1, (len(docs) + 9) // 10)
@@ -840,6 +848,7 @@ async def page_callback(callback: CallbackQuery):
 async def anime_detail_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     _, message_id, page_raw = callback.data.split(":", 2)
     page = int(page_raw)
     doc = anime_collection.find_one({"id": message_id}, {"key": 1, "id": 1})
@@ -864,10 +873,16 @@ async def replace_callback(callback: CallbackQuery):
     doc = anime_collection.find_one({"id": old_id}, {"key": 1, "id": 1})
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
-    pending[callback.from_user.id] = {"stage": "replace_post", "anime_id": old_id}
-    prompt = await callback.message.answer(ui("Send the new original post. The old message ID will be replaced only after the new post is copied successfully."))
+    pending[callback.from_user.id] = {
+        "stage": "replace_post", "anime_id": old_id,
+        "settings_chat_id": callback.message.chat.id,
+        "settings_message_id": callback.message.message_id,
+        "input_message_ids": [], "prompt_message_ids": [],
+    }
+    await clear_owner_interaction_messages(pending[callback.from_user.id])
+    await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
+                            "Send the replacement anime post. The old record stays active until the new fixed link is saved.")
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
-    await track_owner_ui(callback.from_user.id, prompt)
     await callback.answer()
 
 @dp.message(Command("broadcast"))
