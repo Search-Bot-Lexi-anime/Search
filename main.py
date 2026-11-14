@@ -323,6 +323,24 @@ def fixed_button_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=small_caps("back"), callback_data="resultcfg:home")],
     ])
 
+def settings_home_text() -> str:
+    anime_count = anime_collection.count_documents({})
+    users_count = len(get_user_ids())
+    return ("<b><i>BOT SETTINGS</i></b>\n\n"
+            "<i>Manage all bot features from this panel.</i>\n\n"
+            f"<i>Saved Anime: {anime_count}</i>\n"
+            f"<i>Users: {users_count}</i>")
+
+def settings_home_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✚ " + small_caps("add anime"), callback_data="settings:add"),
+         InlineKeyboardButton(text=small_caps("show anime"), callback_data="settings:show")],
+        [InlineKeyboardButton(text=small_caps("start message"), callback_data="settings:start"),
+         InlineKeyboardButton(text=small_caps("result buttons"), callback_data="settings:results")],
+        [InlineKeyboardButton(text=small_caps("broadcast"), callback_data="settings:broadcast"),
+         InlineKeyboardButton(text=small_caps("pin broadcast"), callback_data="settings:pbroadcast")],
+    ])
+
 def start_settings_text(cfg: dict) -> str:
     caption_state = "Added ✅" if cfg.get("caption_custom") else "Default ✨"
     media_state = "Added ✅" if cfg.get("media_type") and cfg.get("media_file_id") else "None ❌"
@@ -462,6 +480,7 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
         nav.append(InlineKeyboardButton(text=small_caps("next"), callback_data=f"page:{page+1}"))
     if nav:
         rows.append(nav)
+    rows.append([InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 @dp.message(CommandStart())
@@ -490,14 +509,12 @@ async def commands_handler(message: Message):
         return
     owner_id = message.from_user.id
     previous_session = await begin_owner_command(owner_id)
-    cfg = get_start_settings()
-
     # Send the fresh panel first; only after it exists, remove the previous panel and command.
     # Use send_message directly: never inherit/reuse the incoming command as a reply target.
     new_panel = await bot.send_message(
         chat_id=message.chat.id,
-        text=start_settings_text(cfg),
-        reply_markup=start_settings_keyboard(cfg),
+        text=settings_home_text(),
+        reply_markup=settings_home_keyboard(),
     )
 
     old_panel = commands_panels.get(owner_id)
@@ -534,6 +551,84 @@ async def refresh_start_settings_message(chat_id: int, message_id: int):
 async def refresh_start_settings(callback: CallbackQuery):
     await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("settings:"))
+async def settings_callback(callback: CallbackQuery):
+    if not callback.from_user or not is_owner(callback.from_user.id):
+        return await callback.answer("Owner only.", show_alert=True)
+
+    action = callback.data.split(":", 1)[1]
+    chat_id, panel_id = callback.message.chat.id, callback.message.message_id
+    await clear_pending_for_panel(callback.from_user.id, panel_id)
+    await cleanup_owner_ui(callback.from_user.id, keep=(chat_id, panel_id))
+
+    if action == "home":
+        await callback.message.edit_text(settings_home_text(), reply_markup=settings_home_keyboard())
+        return await callback.answer()
+
+    if action == "start":
+        cfg = get_start_settings()
+        await callback.message.edit_text(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+        return await callback.answer()
+
+    if action == "results":
+        cfg = get_result_button_settings()
+        await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
+        return await callback.answer()
+
+    if action == "add":
+        pending[callback.from_user.id] = {
+            "stage": "names", "settings_chat_id": chat_id, "settings_message_id": panel_id,
+            "input_message_ids": [], "prompt_message_ids": [],
+        }
+        await callback.message.edit_text(
+            ui("<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")]
+            ]),
+        )
+        await callback.answer()
+        await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
+                                "Send all alternate anime names, separated by commas or new lines.")
+        return
+
+    if action == "show":
+        docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
+        if not docs:
+            await callback.message.edit_text(
+                ui("<b><i>SAVED ANIME</i></b>\n\n<i>No anime records have been added yet.</i>"),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")]
+                ]),
+            )
+            return await callback.answer()
+        total_pages = max(1, (len(docs) + 9) // 10)
+        await callback.message.edit_text(
+            ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\n<i>Select a title to view its details.</i>"),
+            reply_markup=anime_list_markup(docs, 0),
+        )
+        return await callback.answer()
+
+    if action in ("broadcast", "pbroadcast"):
+        pin = action == "pbroadcast"
+        pending.pop(callback.from_user.id, None)
+        await start_broadcast_wait(callback.from_user.id, chat_id, pin=pin)
+        await callback.message.edit_text(
+            ui("<b><i>PIN BROADCAST</i></b>\n\n<i>Send the message to broadcast and pin. You have 30 seconds.</i>" if pin
+               else "<b><i>BROADCAST</i></b>\n\n<i>Send the message to broadcast. You have 30 seconds.</i>"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")]
+            ]),
+        )
+        prompt = await bot.send_message(
+            chat_id=chat_id,
+            text=ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."),
+        )
+        await track_owner_ui(callback.from_user.id, prompt)
+        return await callback.answer()
+
+    await callback.answer("Unknown setting.", show_alert=True)
+
 
 @dp.callback_query(F.data.startswith("startcfg:"))
 async def startcfg_callback(callback: CallbackQuery):
@@ -660,7 +755,7 @@ async def resultcfg_callback(callback: CallbackQuery):
         await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
         return await callback.answer()
     if action == "back":
-        await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
+        await callback.message.edit_text(settings_home_text(), reply_markup=settings_home_keyboard())
         return await callback.answer()
     if action == "fixed":
         await callback.message.edit_text(fixed_button_text(cfg), reply_markup=fixed_button_keyboard())
@@ -1249,7 +1344,6 @@ async def main():
                 BotCommand(command="show", description=small_caps("Show anime records")),
                 BotCommand(command="settings", description=small_caps("Open bot settings")),
                 BotCommand(command="commands", description=small_caps("Open bot settings")),
-                BotCommand(command="setstart", description=small_caps("Open bot settings")),
                 BotCommand(command="broadcast", description=small_caps("Broadcast a message")),
                 BotCommand(command="pbroadcast", description=small_caps("Broadcast and pin a message")),
             ]
