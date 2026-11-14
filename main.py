@@ -179,7 +179,7 @@ def result_keyboard_from_source(source_markup, cfg: dict):
     if cfg.get("custom_enabled"):
         custom_label = button_label_text(cfg.get("custom_button_text"))
         custom_url = (cfg.get("custom_button_url") or "").strip()
-        if custom_label and re.fullmatch(r"https?://[^\\s]+", custom_url, re.I):
+        if custom_label and re.fullmatch(r"https?://[^\s]+", custom_url, re.I):
             rows.append([InlineKeyboardButton(text=custom_label, url=custom_url)])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -790,7 +790,7 @@ async def add_handler(message: Message):
     }
     prompt = await send_owner_prompt(
         message.from_user.id, pending[message.from_user.id],
-        "<b><i>ADD ANIME</i></b>\\n\\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"
+        "<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"
     )
     await cleanup_owner_ui(message.from_user.id, keep=(prompt.chat.id, prompt.message_id))
     try:
@@ -1110,7 +1110,7 @@ async def all_messages_handler(message: Message):
 
         if stage == "custom_button_url":
             url = (message.text or "").strip()
-            if not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+            if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await message.answer(ui("<i>Send a valid http:// or https:// link.</i>"))
             bot_settings_collection.update_one(
                 {"_id": RESULT_BUTTONS_ID},
@@ -1173,7 +1173,7 @@ async def all_messages_handler(message: Message):
 
         if stage in ("fixed_url", "replace_fixed_url"):
             url = (message.text or "").strip()
-            if not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+            if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await message.answer(ui("<i>Send a valid http:// or https:// link for the Fixed Button.</i>"))
             try:
                 label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
