@@ -474,7 +474,7 @@ def media_settings_keyboard(has_media: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 async def send_start_page(message: Message):
-    cfg = get_start_settings()
+    cfg = await asyncio.to_thread(get_start_settings)
     body = await render_start_text(cfg.get("text") or DEFAULT_START["text"], message.from_user)
     markup = start_keyboard(cfg)
     media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
@@ -760,7 +760,7 @@ async def setstart_handler(message: Message):
         return
     user_id = message.from_user.id
     previous_session = await begin_owner_command(user_id)
-    cfg = get_start_settings()
+    cfg = await asyncio.to_thread(get_start_settings)
     panel = await open_owner_panel(
         user_id,
         message.chat.id,
@@ -771,7 +771,7 @@ async def setstart_handler(message: Message):
     await delete_command_message(message)
 
 async def refresh_start_settings_message(chat_id: int, message_id: int):
-    cfg = get_start_settings()
+    cfg = await asyncio.to_thread(get_start_settings)
     await bot.edit_message_text(
         start_settings_text(cfg),
         chat_id=chat_id,
@@ -804,7 +804,7 @@ async def settings_callback(callback: CallbackQuery):
         return await callback.answer()
 
     if action == "start":
-        cfg = get_start_settings()
+        cfg = await asyncio.to_thread(get_start_settings)
         await callback.message.edit_text(
             start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg),
             link_preview_options={"is_disabled": True},
@@ -812,7 +812,7 @@ async def settings_callback(callback: CallbackQuery):
         return await callback.answer()
 
     if action == "results":
-        cfg = get_result_button_settings()
+        cfg = await asyncio.to_thread(get_result_button_settings)
         await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
         return await callback.answer()
 
@@ -829,7 +829,7 @@ async def settings_callback(callback: CallbackQuery):
         return
 
     if action == "show":
-        docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
+        docs = await asyncio.to_thread(lambda: list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1)))
         if not docs:
             await callback.message.edit_text(
                 ui("<b><i>SAVED ANIME</i></b>\n\n<i>No anime records have been added yet.</i>"),
@@ -867,7 +867,7 @@ async def startcfg_callback(callback: CallbackQuery):
     if not is_private_chat(callback.message.chat):
         return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     action = callback.data.split(":", 1)[1]
-    cfg = get_start_settings()
+    cfg = await asyncio.to_thread(get_start_settings)
 
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
@@ -953,7 +953,8 @@ async def startcfg_callback(callback: CallbackQuery):
                 {"_id": START_SETTINGS_ID},
                 {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
             )
-            await callback.message.edit_text(start_buttons_text(get_start_settings()), reply_markup=start_buttons_keyboard(get_start_settings()))
+            cfg_now = await asyncio.to_thread(get_start_settings)
+            await callback.message.edit_text(start_buttons_text(cfg_now), reply_markup=start_buttons_keyboard(cfg_now))
             return await callback.answer(f"✨ Button {idx} disabled.")
         pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_page": "buttons", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
@@ -973,7 +974,7 @@ async def resultcfg_callback(callback: CallbackQuery):
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     action = callback.data.split(":", 1)[1]
-    cfg = get_result_button_settings()
+    cfg = await asyncio.to_thread(get_result_button_settings)
 
     if action == "home":
         await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
@@ -994,7 +995,7 @@ async def resultcfg_callback(callback: CallbackQuery):
         bot_settings_collection.update_one(
             {"_id": RESULT_BUTTONS_ID}, {"$unset": {"fixed_button_text": ""}}, upsert=True
         )
-        cfg = get_result_button_settings()
+        cfg = await asyncio.to_thread(get_result_button_settings)
         await callback.message.edit_text(fixed_button_text(cfg), reply_markup=fixed_button_keyboard())
         return await callback.answer("Successfully Restored to default ♻️", show_alert=True)
     if action == "fixed_edit":
@@ -1014,7 +1015,7 @@ async def resultcfg_callback(callback: CallbackQuery):
             bot_settings_collection.update_one(
                 {"_id": RESULT_BUTTONS_ID}, {"$set": {"custom_enabled": False}}, upsert=True
             )
-            cfg = get_result_button_settings()
+            cfg = await asyncio.to_thread(get_result_button_settings)
             await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
             return await callback.answer("✨ Custom Button Disabled.")
         pending[callback.from_user.id] = {
@@ -1032,7 +1033,8 @@ async def resultcfg_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "start:about")
 async def start_about_callback(callback: CallbackQuery):
-    if not get_start_settings().get("about_enabled", True):
+    cfg = await asyncio.to_thread(get_start_settings)
+    if not cfg.get("about_enabled", True):
         return await callback.answer("About is disabled.", show_alert=True)
     await callback.answer()
     global bot_profile
@@ -1051,7 +1053,7 @@ async def start_about_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "start:back")
 async def start_back_callback(callback: CallbackQuery):
     await callback.answer()
-    cfg = get_start_settings()
+    cfg = await asyncio.to_thread(get_start_settings)
     body = await render_start_text(cfg.get("text") or DEFAULT_START["text"], callback.from_user)
     markup = start_keyboard(cfg)
     if callback.message.photo or callback.message.animation:
@@ -1098,7 +1100,7 @@ async def show_handler(message: Message):
         await delete_command_message(message)
         return
     previous_session = await begin_owner_command(message.from_user.id)
-    docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
+    docs = await asyncio.to_thread(lambda: list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1)))
     if not docs:
         prompt = await open_owner_panel(
             message.from_user.id,
@@ -1136,7 +1138,7 @@ async def page_callback(callback: CallbackQuery):
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     page = int(callback.data.split(":", 1)[1])
-    docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
+    docs = await asyncio.to_thread(lambda: list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1)))
     total_pages = max(1, (len(docs) + 9) // 10)
     page = max(0, min(page, total_pages - 1))
     start = page * 10
@@ -1157,7 +1159,7 @@ async def anime_detail_callback(callback: CallbackQuery):
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     _, message_id, page_raw = callback.data.split(":", 2)
     page = int(page_raw)
-    doc = anime_collection.find_one({"id": message_id}, {"key": 1, "id": 1, "link": 1})
+    doc = await asyncio.to_thread(anime_collection.find_one, {"id": message_id}, {"key": 1, "id": 1, "link": 1})
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
     link_state = "Saved ✅" if doc.get("link") else "Missing ❌"
@@ -1179,7 +1181,7 @@ async def anime_link_edit_callback(callback: CallbackQuery):
     if not is_private_chat(callback.message.chat):
         return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     _, anime_id, page_raw = callback.data.split(":", 2)
-    if not anime_collection.find_one({"id": anime_id}, {"_id": 1}):
+    if not await asyncio.to_thread(anime_collection.find_one, {"id": anime_id}, {"_id": 1}):
         return await callback.answer("Record not found.", show_alert=True)
     previous_session = await begin_owner_command(callback.from_user.id)
     session = {
@@ -1208,7 +1210,7 @@ async def replace_callback(callback: CallbackQuery):
         return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     previous_session = await begin_owner_command(callback.from_user.id)
     old_id = callback.data.split(":", 1)[1]
-    doc = anime_collection.find_one({"id": old_id}, {"key": 1, "id": 1})
+    doc = await asyncio.to_thread(anime_collection.find_one, {"id": old_id}, {"key": 1, "id": 1})
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
     pending[callback.from_user.id] = {
@@ -1487,7 +1489,7 @@ async def all_messages_handler(message: Message):
             )
             await clear_owner_interaction_messages(session, message)
             pending.pop(user_id, None)
-            cfg = get_result_button_settings()
+            cfg = await asyncio.to_thread(get_result_button_settings)
             await edit_owner_panel(session, fixed_button_text(cfg), fixed_button_keyboard())
             return
 
@@ -1516,7 +1518,7 @@ async def all_messages_handler(message: Message):
             )
             await clear_owner_interaction_messages(session, message)
             pending.pop(user_id, None)
-            cfg = get_result_button_settings()
+            cfg = await asyncio.to_thread(get_result_button_settings)
             await edit_owner_panel(session, result_buttons_text(cfg), result_buttons_keyboard(cfg))
             return
 
@@ -1524,7 +1526,7 @@ async def all_messages_handler(message: Message):
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
-            if not anime_collection.find_one({"id": session["anime_id"]}, {"_id": 1}):
+            if not await asyncio.to_thread(anime_collection.find_one, {"id": session["anime_id"]}, {"_id": 1}):
                 return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
             try:
                 result = anime_collection.update_one(
@@ -1533,7 +1535,8 @@ async def all_messages_handler(message: Message):
                 )
                 if not result.matched_count:
                     return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
-                label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+                fixed_cfg = await asyncio.to_thread(get_result_button_settings)
+                label = button_label_text(fixed_cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
                 await bot.edit_message_reply_markup(
                     chat_id=DATA_CHANNEL_ID,
                     message_id=int(session["anime_id"]),
@@ -1600,7 +1603,8 @@ async def all_messages_handler(message: Message):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link for the Fixed Button.</i>")
             new_message_id = int(session["new_id"])
             try:
-                label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+                fixed_cfg = await asyncio.to_thread(get_result_button_settings)
+                label = button_label_text(fixed_cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
                 await bot.edit_message_reply_markup(
                     chat_id=DATA_CHANNEL_ID,
                     message_id=new_message_id,
