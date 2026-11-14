@@ -434,22 +434,6 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
 
     session["task"] = asyncio.create_task(expire())
 
-async def copy_to_data_channel(message: Message, fixed_url: str) -> int:
-    copied = await bot.copy_message(
-        chat_id=DATA_CHANNEL_ID,
-        from_chat_id=message.chat.id,
-        message_id=message.message_id,
-    )
-    label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
-    await bot.edit_message_reply_markup(
-        chat_id=DATA_CHANNEL_ID,
-        message_id=copied.message_id,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=label, url=fixed_url)]
-        ]),
-    )
-    return copied.message_id
-
 async def deliver_saved(chat_id: int, message_id: int, reply_to: Message | None = None):
     # The fixed URL is stored only in the canonical channel post's inline keyboard.
     kwargs = {"chat_id": chat_id, "from_chat_id": DATA_CHANNEL_ID, "message_id": message_id}
