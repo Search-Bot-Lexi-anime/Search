@@ -1042,6 +1042,8 @@ async def resultcfg_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "start:about")
 async def start_about_callback(callback: CallbackQuery):
+    if callback.from_user and is_owner(callback.from_user.id):
+        await cancel_owner_process(callback.from_user.id)
     cfg = await asyncio.to_thread(get_start_settings)
     if not cfg.get("about_enabled", True):
         return await callback.answer("About is disabled.", show_alert=True)
@@ -1061,6 +1063,8 @@ async def start_about_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "start:back")
 async def start_back_callback(callback: CallbackQuery):
+    if callback.from_user and is_owner(callback.from_user.id):
+        await cancel_owner_process(callback.from_user.id)
     await callback.answer()
     cfg = await asyncio.to_thread(get_start_settings)
     body = await render_start_text(cfg.get("text") or DEFAULT_START["text"], callback.from_user)
@@ -1542,16 +1546,17 @@ async def all_messages_handler(message: Message):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
             if not await asyncio.to_thread(anime_collection.find_one, {"id": session["anime_id"]}, {"_id": 1}):
                 return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
+            old_doc = await asyncio.to_thread(
+                anime_collection.find_one,
+                {"id": session["anime_id"]},
+                {"_id": 0, "link": 1},
+            )
+            if not old_doc:
+                return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
+            old_url = (old_doc.get("link") or "").strip()
+            fixed_cfg = await asyncio.to_thread(get_result_button_settings)
+            label = button_label_text(fixed_cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
             try:
-                result = await asyncio.to_thread(
-                    anime_collection.update_one,
-                    {"id": session["anime_id"]},
-                    {"$set": {"link": url}},
-                )
-                if not result.matched_count:
-                    return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
-                fixed_cfg = await asyncio.to_thread(get_result_button_settings)
-                label = button_label_text(fixed_cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
                 await bot.edit_message_reply_markup(
                     chat_id=DATA_CHANNEL_ID,
                     message_id=int(session["anime_id"]),
@@ -1559,8 +1564,30 @@ async def all_messages_handler(message: Message):
                         [InlineKeyboardButton(text=label, url=url)]
                     ]),
                 )
+                result = await asyncio.to_thread(
+                    anime_collection.update_one,
+                    {"id": session["anime_id"]},
+                    {"$set": {"link": url}},
+                )
+                if not result.matched_count:
+                    raise RuntimeError("Anime record not found during fixed-link update")
             except Exception:
                 log.exception("Could not update anime fixed link")
+                try:
+                    rollback_markup = (
+                        InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text=label, url=old_url)]
+                        ])
+                        if re.fullmatch(r"https?://[^\\s]+", old_url, re.I)
+                        else None
+                    )
+                    await bot.edit_message_reply_markup(
+                        chat_id=DATA_CHANNEL_ID,
+                        message_id=int(session["anime_id"]),
+                        reply_markup=rollback_markup,
+                    )
+                except Exception:
+                    log.exception("Could not roll back canonical post keyboard after failed URL update")
                 return await send_owner_prompt(user_id, session, "<i>Could not update the Fixed Button link. Please try again.</i>")
             await clear_owner_interaction_messages(session, message)
             pending.pop(user_id, None)
