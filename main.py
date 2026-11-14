@@ -1122,6 +1122,32 @@ async def all_messages_handler(message: Message):
     user_id = message.from_user.id
     register_user(user_id)
 
+    # A new command cancels an active input flow before the command can be mistaken for user input.
+    if is_owner(user_id) and message.text and message.text.startswith("/") and (user_id in pending or user_id in pending_broadcast):
+        active_session = pending.get(user_id)
+        broadcast_session = pending_broadcast.get(user_id)
+        if active_session and active_session.get("settings_message_id"):
+            panel_ref = (active_session.get("settings_chat_id", message.chat.id), active_session["settings_message_id"])
+        elif broadcast_session and broadcast_session.get("panel_message_id"):
+            panel_ref = (broadcast_session.get("chat_id", message.chat.id), broadcast_session["panel_message_id"])
+        else:
+            panels = owner_ui_state.get(user_id, {}).get("panels", [])
+            panel_ref = panels[-1] if panels else None
+        await cancel_owner_process(user_id, notify_broadcast=False)
+        await cleanup_owner_ui(user_id, keep=panel_ref)
+        if panel_ref:
+            try:
+                await bot.edit_message_text(
+                    chat_id=panel_ref[0],
+                    message_id=panel_ref[1],
+                    text=settings_home_text(),
+                    reply_markup=settings_home_keyboard(),
+                    link_preview_options={"is_disabled": True},
+                )
+            except Exception:
+                log.debug("Could not restore the owner panel after cancelling an input")
+        return
+
     async def clear_setup_messages(session, input_message: Message | None = None):
         input_ids = list(session.get("input_message_ids", []))
         if input_message is not None and input_message.message_id not in input_ids:
