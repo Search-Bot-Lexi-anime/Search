@@ -1747,6 +1747,7 @@ async def all_messages_handler(message: Message):
                 )
             except Exception:
                 log.debug("Could not restore the owner panel after cancelling an input")
+        await delete_command_message(message)
         return
 
     if is_owner(user_id) and user_id in pending_broadcast and pending_broadcast[user_id].get("chat_id") == message.chat.id and not (message.text or "").startswith("/"):
