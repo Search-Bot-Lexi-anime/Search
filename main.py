@@ -523,6 +523,7 @@ async def commands_handler(message: Message):
         chat_id=message.chat.id,
         text=settings_home_text(),
         reply_markup=settings_home_keyboard(),
+        link_preview_options={"is_disabled": True},
     )
 
     old_panel = commands_panels.get(owner_id)
@@ -554,6 +555,7 @@ async def refresh_start_settings_message(chat_id: int, message_id: int):
         chat_id=chat_id,
         message_id=message_id,
         reply_markup=start_settings_keyboard(cfg),
+        link_preview_options={"is_disabled": True},
     )
 
 async def refresh_start_settings(callback: CallbackQuery):
@@ -571,12 +573,18 @@ async def settings_callback(callback: CallbackQuery):
     await cleanup_owner_ui(callback.from_user.id, keep=(chat_id, panel_id))
 
     if action == "home":
-        await callback.message.edit_text(settings_home_text(), reply_markup=settings_home_keyboard())
+        await callback.message.edit_text(
+            settings_home_text(), reply_markup=settings_home_keyboard(),
+            link_preview_options={"is_disabled": True},
+        )
         return await callback.answer()
 
     if action == "start":
         cfg = get_start_settings()
-        await callback.message.edit_text(start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg))
+        await callback.message.edit_text(
+            start_settings_text(cfg), reply_markup=start_settings_keyboard(cfg),
+            link_preview_options={"is_disabled": True},
+        )
         return await callback.answer()
 
     if action == "results":
@@ -658,7 +666,10 @@ async def startcfg_callback(callback: CallbackQuery):
                 log.debug("Could not clear previous /setstart interaction message")
 
     if action == "settings_home":
-        await callback.message.edit_text(settings_home_text(), reply_markup=settings_home_keyboard())
+        await callback.message.edit_text(
+            settings_home_text(), reply_markup=settings_home_keyboard(),
+            link_preview_options={"is_disabled": True},
+        )
         return await callback.answer()
 
     if action in ("back", "home"):
@@ -767,7 +778,10 @@ async def resultcfg_callback(callback: CallbackQuery):
         await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
         return await callback.answer()
     if action == "back":
-        await callback.message.edit_text(settings_home_text(), reply_markup=settings_home_keyboard())
+        await callback.message.edit_text(
+            settings_home_text(), reply_markup=settings_home_keyboard(),
+            link_preview_options={"is_disabled": True},
+        )
         return await callback.answer()
     if action == "fixed":
         await callback.message.edit_text(fixed_button_text(cfg), reply_markup=fixed_button_keyboard())
