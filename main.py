@@ -270,7 +270,7 @@ def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=small_caps("buttons"), callback_data="startcfg:buttons"),
          InlineKeyboardButton(text=small_caps("about"), callback_data="startcfg:about_toggle")],
         [InlineKeyboardButton(text=small_caps("custom button"), callback_data="resultcfg:home")],
-        [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="startcfg:settings_home")],
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="startcfg:settings_home")],
     ])
 
 def start_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
@@ -312,7 +312,7 @@ def result_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=small_caps("fixed button"), callback_data="resultcfg:fixed"),
          InlineKeyboardButton(text=small_caps(custom_status), callback_data="resultcfg:custom_toggle")],
-        [InlineKeyboardButton(text=small_caps("back"), callback_data="resultcfg:back")],
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="resultcfg:back")],
     ])
 
 def fixed_button_keyboard() -> InlineKeyboardMarkup:
@@ -320,7 +320,7 @@ def fixed_button_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=small_caps("edit"), callback_data="resultcfg:fixed_edit"),
          InlineKeyboardButton(text=small_caps("see"), callback_data="resultcfg:fixed_see")],
         [InlineKeyboardButton(text=small_caps("default"), callback_data="resultcfg:fixed_default")],
-        [InlineKeyboardButton(text=small_caps("back"), callback_data="resultcfg:home")],
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="resultcfg:home")],
     ])
 
 def bot_mention_text() -> str:
@@ -375,7 +375,7 @@ def media_settings_keyboard(has_media: bool) -> InlineKeyboardMarkup:
         ]]
     else:
         rows = [[InlineKeyboardButton(text="✚ " + small_caps("add"), callback_data="startcfg:media_edit")]]
-    rows.append([InlineKeyboardButton(text=small_caps("back"), callback_data="startcfg:home")])
+    rows.append([InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="startcfg:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 async def send_start_page(message: Message):
@@ -482,7 +482,7 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
         nav.append(InlineKeyboardButton(text=small_caps("next"), callback_data=f"page:{page+1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")])
+    rows.append([InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 @dp.message(CommandStart())
@@ -594,7 +594,7 @@ async def settings_callback(callback: CallbackQuery):
         await callback.message.edit_text(
             ui("<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")]
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
             ]),
         )
         await callback.answer()
@@ -608,7 +608,7 @@ async def settings_callback(callback: CallbackQuery):
             await callback.message.edit_text(
                 ui("<b><i>SAVED ANIME</i></b>\n\n<i>No anime records have been added yet.</i>"),
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")]
+                    [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
                 ]),
             )
             return await callback.answer()
@@ -627,7 +627,7 @@ async def settings_callback(callback: CallbackQuery):
             ui("<b><i>PIN BROADCAST</i></b>\n\n<i>Send the message to broadcast and pin. You have 30 seconds.</i>" if pin
                else "<b><i>BROADCAST</i></b>\n\n<i>Send the message to broadcast. You have 30 seconds.</i>"),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=small_caps("back to settings"), callback_data="settings:home")]
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
             ]),
         )
         prompt = await bot.send_message(
@@ -833,7 +833,7 @@ async def start_about_callback(callback: CallbackQuery):
         bot_profile = await bot.get_me()
     body = about_text(bot_profile)
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="start:back")]
+        [InlineKeyboardButton(text=small_caps("back"), callback_data="start:back")]
     ])
     if callback.message.photo or callback.message.animation:
         await callback.message.edit_caption(caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
@@ -933,7 +933,7 @@ async def anime_detail_callback(callback: CallbackQuery):
         return await callback.answer("Record not found.", show_alert=True)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{message_id}")],
-        [InlineKeyboardButton(text=small_caps("back"), callback_data=f"page:{page}")],
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data=f"page:{page}")],
     ])
     await callback.message.edit_text(
         ui(f"<b><i>ANIME NAMES</i></b>\n{escape(doc['key'])}\n\n<b><i>STATUS</i></b>\n<i>Saved and ready to replace.</i>"),
