@@ -953,6 +953,12 @@ async def all_messages_handler(message: Message):
     user_id = message.from_user.id
     register_user(user_id)
 
+    # Unknown commands must never be consumed as input for an active owner workflow.
+    if is_owner(user_id) and message.text and message.text.startswith("/") and (user_id in pending or user_id in pending_broadcast):
+        await cancel_owner_process(user_id, notify_broadcast=True)
+        await cleanup_owner_ui(user_id)
+        return
+
     async def clear_setup_messages(session, input_message: Message | None = None):
         input_ids = list(session.get("input_message_ids", []))
         if input_message is not None and input_message.message_id not in input_ids:
@@ -1107,10 +1113,8 @@ async def all_messages_handler(message: Message):
             if not names:
                 return await message.answer(ui("<i>Send at least one anime name.</i>"))
             session["key"] = ", ".join(names)
-            existing_names = set()
-            for record in anime_collection.find({}, {"key": 1}):
-                existing_names.update(clean_query(x) for x in record.get("key", "").split(","))
-            duplicates = [name for name in names if clean_query(name) in existing_names]
+            # Use the same fuzzy alias matcher as public search to prevent near-duplicate records.
+            duplicates = [name for name in names if find_anime(name)]
             if duplicates:
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
