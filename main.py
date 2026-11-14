@@ -672,6 +672,43 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool, panel_mess
 
     session["task"] = asyncio.create_task(expire())
 
+async def ensure_canonical_fixed_buttons():
+    migration_id = "canonical_fixed_buttons_migrated"
+    migration = await asyncio.to_thread(bot_settings_collection.find_one, {"_id": migration_id})
+    if migration and migration.get("done"):
+        return
+
+    docs = await asyncio.to_thread(
+        lambda: list(anime_collection.find({}, {"id": 1, "link": 1}))
+    )
+    cfg = await asyncio.to_thread(get_result_button_settings)
+    label = button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+    failed = False
+    for doc in docs:
+        url = (doc.get("link") or "").strip()
+        if not url or not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+            continue
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=DATA_CHANNEL_ID,
+                message_id=int(doc["id"]),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=label, url=url)]
+                ]),
+            )
+        except Exception:
+            failed = True
+            log.warning("Could not migrate fixed button on data-channel post %s", doc.get("id"), exc_info=True)
+
+    if not failed:
+        await asyncio.to_thread(
+            bot_settings_collection.update_one,
+            {"_id": migration_id},
+            {"$set": {"done": True}},
+            upsert=True,
+        )
+
+
 async def deliver_saved(chat_id: int, anime: dict, reply_to: Message | None = None):
     # One Telegram copy request attaches the anime's fixed link and optional custom button.
     kwargs = {
@@ -1859,6 +1896,7 @@ async def main():
                     [BotCommand(command="start", description=small_caps("Start the adventure ✨")), *owner_commands],
                     scope=BotCommandScopeChat(chat_id=int(owner_id)),
                 )
+            await ensure_canonical_fixed_buttons()
             runtime_state["telegram"] = "connected"
             log.info("Aiogram polling starting")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
