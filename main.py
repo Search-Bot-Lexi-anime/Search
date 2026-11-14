@@ -791,7 +791,7 @@ async def show_handler(message: Message):
     total_pages = max(1, (len(docs) + 9) // 10)
     panel = await bot.send_message(
         chat_id=message.chat.id,
-        text=ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\nSelect a title to view its details."),
+        text=ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\n<i>Select a title to view its details.</i>"),
         reply_markup=anime_list_markup(docs, 0),
     )
     await track_owner_ui(message.from_user.id, panel, "panel")
@@ -835,7 +835,7 @@ async def anime_detail_callback(callback: CallbackQuery):
         [InlineKeyboardButton(text=small_caps("back"), callback_data=f"page:{page}")],
     ])
     await callback.message.edit_text(
-        ui(f"<b><i>ANIME NAMES</i></b>\n{escape(doc['key'])}\n\n<b>STATUS</b>\nSaved and ready to replace."),
+        ui(f"<b><i>ANIME NAMES</i></b>\n{escape(doc['key'])}\n\n<b><i>STATUS</i></b>\n<i>Saved and ready to replace.</i>"),
         reply_markup=keyboard,
     )
     await callback.answer()
