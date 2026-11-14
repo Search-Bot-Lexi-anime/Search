@@ -200,24 +200,25 @@ async def clear_owner_interaction_messages(session: dict, input_message: Message
     session.pop("prompt_message_id", None)
     session.pop("last_input_message_id", None)
 
+async def edit_owner_panel(session: dict, text: str, reply_markup=None) -> Message:
+    markup = reply_markup or InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+    ])
+    return await bot.edit_message_text(
+        chat_id=session["settings_chat_id"],
+        message_id=session["settings_message_id"],
+        text=ui(text),
+        reply_markup=markup,
+        link_preview_options={"is_disabled": True},
+    )
+
 async def send_owner_prompt(user_id: int, session: dict, text: str) -> Message:
-    chat_id = session["settings_chat_id"]
-    panel_id = session.get("settings_message_id")
-    if panel_id:
-        prompt = await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=panel_id,
-            text=ui(text),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
-            ]),
-            link_preview_options={"is_disabled": True},
-        )
-    else:
-        prompt = await bot.send_message(chat_id=chat_id, text=ui(text))
-        session["settings_message_id"] = prompt.message_id
-        session.setdefault("prompt_message_ids", []).clear()
-        await track_owner_ui(user_id, prompt, "panel")
+    if session.get("settings_message_id"):
+        return await edit_owner_panel(session, text)
+    prompt = await bot.send_message(chat_id=session["settings_chat_id"], text=ui(text))
+    session["settings_message_id"] = prompt.message_id
+    session.setdefault("prompt_message_ids", []).clear()
+    await track_owner_ui(user_id, prompt, "panel")
     return prompt
 
 async def clear_pending_for_panel(user_id: int, panel_message_id: int):
@@ -750,7 +751,7 @@ async def startcfg_callback(callback: CallbackQuery):
             )
             await callback.message.edit_text(start_buttons_text(get_start_settings()), reply_markup=start_buttons_keyboard(get_start_settings()))
             return await callback.answer(f"✨ Button {idx} disabled.")
-        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
+        pending[callback.from_user.id] = {"stage": "start_button_text", "button": idx, "settings_page": "buttons", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
         await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
         await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
@@ -1118,18 +1119,18 @@ async def all_messages_handler(message: Message):
             # Serialize Telegram entities back to HTML so formatting survives MongoDB storage.
             value = message.html_text or message.html_caption
             if not value:
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<b>INVALID CAPTION</b>\nSend text only."))
+                return await send_owner_prompt(user_id, session, "<b>INVALID CAPTION</b>\nSend text only.")
             try:
                 await bot_settings_collection.update_one(
                     {"_id": START_SETTINGS_ID}, {"$set": {"text": value, "caption_custom": True}}, upsert=True
                 )
             except Exception:
                 log.exception("Start caption save failed")
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<b>SAVE FAILED</b>\nCaption could not be saved."))
+                return await send_owner_prompt(user_id, session, "<b>SAVE FAILED</b>\nCaption could not be saved. Please try again.")
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await bot.send_message(chat_id=message.chat.id, text=ui("<i>✨ Successfully Updated New Start Message Caption.</i>"))
+            return
 
         if stage == "start_media":
             if message.photo:
@@ -1137,7 +1138,7 @@ async def all_messages_handler(message: Message):
             elif message.animation:
                 media_type, media_id = "animation", message.animation.file_id
             else:
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<b>INVALID MEDIA</b>\nPlease send a photo or GIF."))
+                return await send_owner_prompt(user_id, session, "<b>INVALID MEDIA</b>\nPlease send a photo or GIF.")
             bot_settings_collection.update_one(
                 {"_id": START_SETTINGS_ID},
                 {"$set": {"media_type": media_type, "media_file_id": media_id}},
@@ -1146,24 +1147,22 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await bot.send_message(chat_id=message.chat.id, text=ui("<i>✨ Start Message media added successfully.</i>"))
+            return
 
         if stage == "start_button_text":
             label = (message.text or "").strip()
             if not label or len(label) > 64:
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<b>INVALID BUTTON TEXT</b>\nSend a label between 1 and 64 characters."))
+                return await send_owner_prompt(user_id, session, "<b>INVALID BUTTON TEXT</b>\nSend a label between 1 and 64 characters.")
             session["label"] = label
             session["stage"] = "start_button_url"
             await clear_setup_messages(session, message)
-            prompt = await bot.send_message(chat_id=message.chat.id, text=ui(f"<i>Now send the URL for Start Message Button {session['button']}.</i>"))
-            session["prompt_message_id"] = prompt.message_id
-            session.setdefault("prompt_message_ids", []).append(prompt.message_id)
+            await send_owner_prompt(user_id, session, f"<i>Now send the URL for Start Message Button {session['button']}.</i>")
             return
 
         if stage == "start_button_url":
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<b>INVALID LINK</b>\nSend a valid http:// or https:// URL."))
+                return await send_owner_prompt(user_id, session, "<b>INVALID LINK</b>\nSend a valid http:// or https:// URL.")
             idx, label = session["button"], session["label"]
             bot_settings_collection.update_one(
                 {"_id": START_SETTINGS_ID},
@@ -1173,7 +1172,7 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             await clear_setup_messages(session, message)
             await refresh_start_panel(session)
-            return await bot.send_message(chat_id=message.chat.id, text=ui(f"<i>✨ Start Message Button {idx} added successfully.</i>"))
+            return
 
 
     if is_owner(user_id) and user_id in pending:
@@ -1185,7 +1184,7 @@ async def all_messages_handler(message: Message):
         if stage == "fixed_button_text":
             label = (message.text or "").strip()
             if not label or len(label) > 64:
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<i>Send a button label between 1 and 64 characters.</i>"))
+                return await send_owner_prompt(user_id, session, "<i>Send a button label between 1 and 64 characters.</i>")
             bot_settings_collection.update_one(
                 {"_id": RESULT_BUTTONS_ID}, {"$set": {"fixed_button_text": label}}, upsert=True
             )
@@ -1196,14 +1195,13 @@ async def all_messages_handler(message: Message):
                 fixed_button_text(cfg), chat_id=session["settings_chat_id"],
                 message_id=session["settings_message_id"], reply_markup=fixed_button_keyboard()
             )
-            notice = await bot.send_message(chat_id=message.chat.id, text=ui("✨ Successfully Updated New Fixed Button Text."))
-            await track_owner_ui(user_id, notice)
+            await edit_owner_panel(session, fixed_button_text(cfg), fixed_button_keyboard())
             return
 
         if stage == "custom_button_text":
             label = (message.text or "").strip()
             if not label or len(label) > 64:
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<i>Send a custom button label between 1 and 64 characters.</i>"))
+                return await send_owner_prompt(user_id, session, "<i>Send a custom button label between 1 and 64 characters.</i>")
             session["custom_label"] = label
             session["stage"] = "custom_button_url"
             await clear_owner_interaction_messages(session, message)
@@ -1213,7 +1211,7 @@ async def all_messages_handler(message: Message):
         if stage == "custom_button_url":
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<i>Send a valid http:// or https:// link.</i>"))
+                return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
             bot_settings_collection.update_one(
                 {"_id": RESULT_BUTTONS_ID},
                 {"$set": {
@@ -1230,22 +1228,20 @@ async def all_messages_handler(message: Message):
                 result_buttons_text(cfg), chat_id=session["settings_chat_id"],
                 message_id=session["settings_message_id"], reply_markup=result_buttons_keyboard(cfg)
             )
-            notice = await bot.send_message(chat_id=message.chat.id, text=ui("✨ Start Message Button Added Successfully.."))
-            await track_owner_ui(user_id, notice)
+            await edit_owner_panel(session, result_buttons_text(cfg), result_buttons_keyboard(cfg))
             return
 
         if stage == "names":
             names = parse_names(message.text or message.caption or "")
             if not names:
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<i>Send at least one anime name.</i>"))
+                return await send_owner_prompt(user_id, session, "<i>Send at least one anime name.</i>")
             session["key"] = ", ".join(names)
             # Use the same fuzzy alias matcher as public search to prevent near-duplicate records.
             duplicates = [name for name in names if find_anime(name)]
             if duplicates:
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
-                notice = await bot.send_message(chat_id=message.chat.id, text=ui("<i>One or more names already match a saved anime. Use /show to inspect existing records.</i>"))
-                await track_owner_ui(user_id, notice)
+                await edit_owner_panel(session, "<i>One or more names already match a saved anime. Use /show to inspect existing records.</i>")
                 return
             session["stage"] = "post"
             await clear_owner_interaction_messages(session, message)
@@ -1267,14 +1263,13 @@ async def all_messages_handler(message: Message):
                 log.exception("Could not copy anime post to data channel")
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
-                notice = await bot.send_message(chat_id=message.chat.id, text=ui("<i>Could not save the post. Please try again.</i>"))
-                await track_owner_ui(user_id, notice)
+                await edit_owner_panel(session, "<i>Could not save the post. Please try again.</i>")
             return
 
         if stage in ("fixed_url", "replace_fixed_url"):
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
-                return await bot.send_message(chat_id=message.chat.id, text=ui("<i>Send a valid http:// or https:// link for the Fixed Button.</i>"))
+                return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link for the Fixed Button.</i>")
             try:
                 label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
                 await bot.edit_message_reply_markup(
@@ -1300,8 +1295,7 @@ async def all_messages_handler(message: Message):
                     success_text = "✨ Replacement saved successfully."
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
-                notice = await bot.send_message(chat_id=message.chat.id, text=ui(success_text))
-                await track_owner_ui(user_id, notice)
+                await edit_owner_panel(session, success_text)
             except Exception:
                 log.exception("Anime post/fixed button save failed")
                 try:
@@ -1310,8 +1304,7 @@ async def all_messages_handler(message: Message):
                     pass
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
-                notice = await bot.send_message(chat_id=message.chat.id, text=ui("<i>Could not save the post and Fixed Button. The existing record was left unchanged.</i>"))
-                await track_owner_ui(user_id, notice)
+                await edit_owner_panel(session, "<i>Could not save the post and Fixed Button. The existing record was left unchanged.</i>")
             return
 
     if is_owner(user_id) and message.text and message.text.startswith("/"):
