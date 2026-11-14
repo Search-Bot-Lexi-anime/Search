@@ -332,13 +332,9 @@ def bot_mention_text() -> str:
 
 
 def settings_home_text() -> str:
-    anime_count = anime_collection.count_documents({})
-    users_count = len(get_user_ids())
-    return (f"<b><u>BOT SETTINGS</u></b> {bot_mention_text()}\n\n"
-            "<i>Access/Manage Bot using the following options below.</i>\n\n"
-            f"<i>Saved Anime: {anime_count}</i>\n"
-            f"<i>Users: {users_count}</i>")
-
+    return (f"<b><u>SETTINGS</u></b> {''}\n\n"
+            f"✰ Name: {bot_mention_text()}\n\n"
+            "<i>Access/Manage Bot using the following options below.</i>")
 def settings_home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✚ " + small_caps("add"), callback_data="settings:add"),
@@ -353,12 +349,11 @@ def start_settings_text(cfg: dict) -> str:
     caption_state = "Added ✅" if cfg.get("caption_custom") else "Default ✨"
     media_state = "Added ✅" if cfg.get("media_type") and cfg.get("media_file_id") else "None ❌"
     about_state = "Enabled ✅" if cfg.get("about_enabled", True) else "Disabled ❌"
-    return (f"<b><u>SETTINGS</u></b> {bot_mention_text()}\n\n"
+    return ("<b><u>SETTINGS</u></b>\n\n"
             "<i>Customize start message using the following options below.</i>\n\n"
             f"<i>Caption: {caption_state}</i>\n"
             f"<i>Media: {media_state}</i>\n"
             f"<i>About: {about_state}</i>")
-
 def caption_settings_keyboard(has_caption: bool) -> InlineKeyboardMarkup:
     if has_caption:
         rows = [[
