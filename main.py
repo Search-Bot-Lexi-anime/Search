@@ -124,23 +124,45 @@ def get_user_ids() -> list[int]:
     doc = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
     return [int(x) for x in doc.get("id", "").split(",") if x.isdigit()]
 
-def find_anime(query: str):
+def load_search_catalog() -> list[dict]:
+    # One MongoDB aggregation fetches anime links and the shared custom-button config.
+    return list(anime_collection.aggregate([
+        {"$lookup": {
+            "from": "bot_settings",
+            "pipeline": [
+                {"$match": {"_id": RESULT_BUTTONS_ID}},
+                {"$project": {
+                    "_id": 0,
+                    "fixed_button_text": 1,
+                    "custom_enabled": 1,
+                    "custom_button_text": 1,
+                    "custom_button_url": 1,
+                }},
+            ],
+            "as": "_result_cfg",
+        }},
+        {"$set": {
+            "_result_cfg": {
+                "$ifNull": [{"$arrayElemAt": ["$_result_cfg", 0]}, {}]
+            }
+        }},
+        {"$project": {"key": 1, "id": 1, "link": 1, "_result_cfg": 1}},
+    ]))
+
+
+def match_anime(query: str, catalog: list[dict]):
     q = clean_query(query)
     if not q:
         return None
-
     best_doc, best_score = None, -1
     q_words = q.split()
-
-    for doc in anime_collection.find({}, {"key": 1, "id": 1}):
+    for doc in catalog:
         for alias in doc.get("key", "").split(","):
             candidate = clean_query(alias)
             if not candidate:
                 continue
-
             if candidate == q:
                 return doc
-
             c_words = candidate.split()
             score = max(
                 fuzz.WRatio(q, candidate),
@@ -149,8 +171,6 @@ def find_anime(query: str):
                 fuzz.token_sort_ratio(q, candidate),
                 fuzz.token_set_ratio(q, candidate),
             )
-
-            # Prefer candidates that cover more of the words the user actually typed.
             matched_words = sum(
                 1 for q_word in q_words
                 if any(c_word.startswith(q_word) or fuzz.ratio(q_word, c_word) >= 82
@@ -161,15 +181,22 @@ def find_anime(query: str):
                 score = max(score, 94 if len(q_words) > 1 else 90)
             elif coverage >= 0.5:
                 score = max(score, 82 + 10 * coverage)
-
             if candidate.startswith(q):
                 score = max(score, min(98, 88 + len(q) * 1.2))
-
             if score > best_score:
                 best_doc, best_score = doc, score
-
     threshold = 58 if len(q) >= 7 else 66 if len(q) >= 4 else 82
     return best_doc if best_score >= threshold else None
+
+
+def find_anime(query: str):
+    return match_anime(query, load_search_catalog())
+
+
+def find_animes(queries: list[str]) -> dict[str, dict | None]:
+    # All alias duplicate checks share a single database round trip.
+    catalog = load_search_catalog()
+    return {query: match_anime(query, catalog) for query in queries}
 
 START_SETTINGS_ID = "start_message"
 RESULT_BUTTONS_ID = "result_buttons"
@@ -186,20 +213,15 @@ def button_label_text(value: str) -> str:
     plain = re.sub(r"<[^>]*>", "", plain)
     return plain.strip()[:64]
 
-def result_keyboard_from_source(source_markup, cfg: dict):
-    fixed_url = None
-    if source_markup and getattr(source_markup, "inline_keyboard", None):
-        for row in source_markup.inline_keyboard:
-            for button in row:
-                if getattr(button, "url", None):
-                    fixed_url = button.url
-                    break
-            if fixed_url:
-                break
+def result_keyboard_for_anime(anime: dict) -> InlineKeyboardMarkup | None:
+    cfg = anime.get("_result_cfg") or {}
     rows = []
-    label = button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
-    if fixed_url and label:
-        rows.append([InlineKeyboardButton(text=label, url=fixed_url)])
+    fixed_url = (anime.get("link") or "").strip()
+    fixed_label = button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+    if fixed_label and re.fullmatch(r"https?://[^\s]+", fixed_url, re.I):
+        rows.append([InlineKeyboardButton(text=fixed_label, url=fixed_url)])
+
+    # The optional custom button is global and occupies its own second row.
     if cfg.get("custom_enabled"):
         custom_label = button_label_text(cfg.get("custom_button_text"))
         custom_url = (cfg.get("custom_button_url") or "").strip()
@@ -541,10 +563,16 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool, panel_mess
 
     session["task"] = asyncio.create_task(expire())
 
-async def deliver_saved(chat_id: int, message_id: int, reply_to: Message | None = None):
-    # Copy the canonical post so the result has no "Forwarded from" attribution.
-    # Telegram keeps the source post's inline keyboard when no replacement markup is supplied.
-    kwargs = {"chat_id": chat_id, "from_chat_id": DATA_CHANNEL_ID, "message_id": message_id}
+async def deliver_saved(chat_id: int, anime: dict, reply_to: Message | None = None):
+    # One Telegram copy request attaches the anime's fixed link and optional custom button.
+    kwargs = {
+        "chat_id": chat_id,
+        "from_chat_id": DATA_CHANNEL_ID,
+        "message_id": int(anime["id"]),
+    }
+    keyboard = result_keyboard_for_anime(anime)
+    if keyboard is not None:
+        kwargs["reply_markup"] = keyboard
     if reply_to is not None:
         kwargs["reply_parameters"] = ReplyParameters(
             message_id=reply_to.message_id,
@@ -1138,7 +1166,6 @@ async def all_messages_handler(message: Message):
     if not message.from_user or message.from_user.is_bot:
         return
     user_id = message.from_user.id
-    register_user(user_id)
 
     # A new command cancels an active input flow before the command can be mistaken for user input.
     if is_owner(user_id) and message.text and message.text.startswith("/") and (user_id in pending or user_id in pending_broadcast):
@@ -1310,7 +1337,8 @@ async def all_messages_handler(message: Message):
                 return await send_owner_prompt(user_id, session, "<i>Send at least one anime name.</i>")
             session["key"] = ", ".join(names)
             # Use the same fuzzy alias matcher as public search to prevent near-duplicate records.
-            duplicates = [name for name in names if find_anime(name)]
+            matches = find_animes(names)
+            duplicates = [name for name in names if matches.get(name)]
             if duplicates:
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
@@ -1344,20 +1372,17 @@ async def all_messages_handler(message: Message):
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link for the Fixed Button.</i>")
             try:
-                label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
-                await bot.edit_message_reply_markup(
-                    chat_id=DATA_CHANNEL_ID,
-                    message_id=session["new_id"],
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text=label, url=url)]
-                    ]),
-                )
                 if stage == "fixed_url":
-                    anime_collection.insert_one({"key": session["key"], "id": str(session["new_id"])})
-                    success_text = "✨ Anime record saved successfully."
+                    anime_collection.insert_one({
+                        "key": session["key"],
+                        "id": str(session["new_id"]),
+                        "link": url,
+                    })
+                    success_text = "✨ Anime record and Fixed Button link saved successfully."
                 else:
                     result = anime_collection.update_one(
-                        {"id": session["anime_id"]}, {"$set": {"id": str(session["new_id"])}}
+                        {"id": session["anime_id"]},
+                        {"$set": {"id": str(session["new_id"]), "link": url}},
                     )
                     if not result.matched_count:
                         raise RuntimeError("Anime record to replace was not found")
@@ -1443,7 +1468,7 @@ async def all_messages_handler(message: Message):
                 try:
                     await deliver_saved(
                         chat_id=message.chat.id,
-                        message_id=int(match["id"]),
+                        anime=match,
                         reply_to=message,
                     )
                 except Exception:
@@ -1488,7 +1513,7 @@ async def all_messages_handler(message: Message):
             try:
                 await deliver_saved(
                     chat_id=message.chat.id,
-                    message_id=int(match["id"]),
+                    anime=match,
                     reply_to=message,
                 )
             except Exception:
