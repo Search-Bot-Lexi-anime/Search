@@ -839,7 +839,7 @@ async def anime_detail_callback(callback: CallbackQuery):
 async def replace_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
-    await cancel_owner_process(callback.from_user.id)
+    previous_session = await begin_owner_command(callback.from_user.id)
     old_id = callback.data.split(":", 1)[1]
     doc = anime_collection.find_one({"id": old_id}, {"key": 1, "id": 1})
     if not doc:
@@ -853,7 +853,8 @@ async def replace_callback(callback: CallbackQuery):
     await clear_owner_interaction_messages(pending[callback.from_user.id])
     await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
                             "Send the replacement anime post. The old record stays active until the new fixed link is saved.")
-    await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
+    await finish_owner_command(callback.from_user.id, previous_session,
+                               (callback.message.chat.id, callback.message.message_id))
     await callback.answer()
 
 @dp.message(Command("broadcast"))
