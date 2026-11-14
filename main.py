@@ -334,7 +334,7 @@ def bot_mention_text() -> str:
 def settings_home_text() -> str:
     anime_count = anime_collection.count_documents({})
     users_count = len(get_user_ids())
-    return (f"<b><i><u>BOT SETTINGS</u></i></b> {bot_mention_text()}\n\n"
+    return (f"<b><u>BOT SETTINGS</u></b> {bot_mention_text()}\n\n"
             "<i>Access/Manage Bot using the following options below.</i>\n\n"
             f"<i>Saved Anime: {anime_count}</i>\n"
             f"<i>Users: {users_count}</i>")
