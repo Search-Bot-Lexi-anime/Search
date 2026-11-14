@@ -14,12 +14,12 @@ def about_text(me) -> str:
     anime_link = '<a href="https://t.me/lexianime">Lexi Anime</a>'
 
     return (
-        "<b>✨ ᴀʙᴏᴜᴛ ᴍᴇ</b>\n\n"
+        "<b><i>✨ ᴀʙᴏᴜᴛ ᴍᴇ</i></b>\n\n"
         "<i>Lexi Anime Finder is a simple companion for discovering your favourite "
         "<b>anime posts</b>. Search for an anime by its title or an alternate name "
         "to find it if it is available. Search understands common title variations "
         "and helps you find the anime you are looking for.</i>\n\n"
-        "<b>✦ ɪɴғᴏʀᴍᴀᴛɪᴏɴ</b>\n"
+        "<b><i>✦ ɪɴғᴏʀᴍᴀᴛɪᴏɴ</i></b>\n"
         f"<b>➤ ɴᴀᴍᴇ : {bot_link}</b>\n"
         "<b>➤ ᴄʀᴇᴀᴛᴏʀ : ʏᴜᴛᴀ</b>\n"
         "<b>➤ ᴏᴡɴᴇʀ : 𝓚𝔂𝓸𝓴𝓸</b>\n"
