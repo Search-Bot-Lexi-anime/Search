@@ -150,6 +150,66 @@ def find_anime(query: str):
     return best_doc if best_score >= threshold else None
 
 START_SETTINGS_ID = "start_message"
+RESULT_BUTTONS_ID = "result_buttons"
+DEFAULT_FIXED_BUTTON_TEXT = os.getenv("FIXED_BUTTON_TEXT", "· ᴡᴀᴛᴄʜ ɴᴏᴡ ·")
+
+def get_result_button_settings() -> dict:
+    saved = bot_settings_collection.find_one({"_id": RESULT_BUTTONS_ID}) or {}
+    return {"fixed_button_text": DEFAULT_FIXED_BUTTON_TEXT, "custom_enabled": False,
+            "custom_button_text": "", "custom_button_url": "", **saved}
+
+def button_label_text(value: str) -> str:
+    # Telegram inline keyboard labels are plain text and cannot render HTML.
+    return unescape(re.sub(r"<[^>]*>", "", str(value or ""))).strip()[:64]
+
+def result_keyboard_from_source(source_markup, cfg: dict):
+    fixed_url = None
+    if source_markup and getattr(source_markup, "inline_keyboard", None):
+        for row in source_markup.inline_keyboard:
+            for button in row:
+                if getattr(button, "url", None):
+                    fixed_url = button.url
+                    break
+            if fixed_url:
+                break
+    rows = []
+    label = button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+    if fixed_url and label:
+        rows.append([InlineKeyboardButton(text=label, url=fixed_url)])
+    if cfg.get("custom_enabled"):
+        custom_label = button_label_text(cfg.get("custom_button_text"))
+        custom_url = (cfg.get("custom_button_url") or "").strip()
+        if custom_label and re.fullmatch(r"https?://[^\\s]+", custom_url, re.I):
+            rows.append([InlineKeyboardButton(text=custom_label, url=custom_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+async def clear_owner_interaction_messages(session: dict, input_message: Message | None = None):
+    chat_id = session.get("settings_chat_id") or (input_message.chat.id if input_message else None)
+    ids = list(session.get("input_message_ids", [])) + list(session.get("prompt_message_ids", []))
+    ids += [session.get("prompt_message_id"), session.get("last_input_message_id")]
+    if input_message is not None:
+        ids.append(input_message.message_id)
+    for message_id in {x for x in ids if x}:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            log.debug("Could not delete owner interaction message")
+    session["input_message_ids"], session["prompt_message_ids"] = [], []
+    session.pop("prompt_message_id", None)
+    session.pop("last_input_message_id", None)
+
+async def send_owner_prompt(user_id: int, session: dict, text: str) -> Message:
+    prompt = await bot.send_message(chat_id=session["settings_chat_id"], text=ui(text))
+    session.setdefault("prompt_message_ids", []).append(prompt.message_id)
+    session["prompt_message_id"] = prompt.message_id
+    await track_owner_ui(user_id, prompt)
+    return prompt
+
+async def clear_pending_for_panel(user_id: int, panel_message_id: int):
+    session = pending.get(user_id)
+    if session and session.get("settings_message_id") == panel_message_id:
+        pending.pop(user_id, None)
+        await clear_owner_interaction_messages(session)
 DEFAULT_START = {
     "_id": START_SETTINGS_ID,
     "text": "<b><i>Welcome, {mention}!</i></b>\n<i>I'm {bot_mention}, your anime search companion. Search an anime name to find it if it is available.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
@@ -208,6 +268,7 @@ def start_settings_keyboard(cfg: dict) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text=small_caps("media"), callback_data="startcfg:media")],
         [InlineKeyboardButton(text=small_caps("buttons"), callback_data="startcfg:buttons"),
          InlineKeyboardButton(text=small_caps("about"), callback_data="startcfg:about_toggle")],
+        [InlineKeyboardButton(text=small_caps("custom button"), callback_data="resultcfg:home")],
     ])
 
 def start_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
@@ -230,15 +291,45 @@ def start_buttons_text(cfg: dict) -> str:
     )
     return ui("<b><u>START BUTTONS</u></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" + statuses)
 
+def result_buttons_text(cfg: dict) -> str:
+    custom_state = "Enabled ✅" if cfg.get("custom_enabled") else "Disabled ❌"
+    label = escape(button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT))
+    return ("<b><u>CUSTOM BUTTON</u></b>\n\n"
+            "<i>Customize Results Post Button Using the buttons below.</i>\n\n"
+            f"<i>Fixed Button: {label}</i>\n"
+            f"<i>Custom Button: {custom_state}</i>")
+
+def fixed_button_text(cfg: dict) -> str:
+    label = escape(button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT))
+    return ("<b><u>FIXED BUTTON</u></b>\n\n"
+            "<i>Customize Fixed Button Label Text As You Want.</i>\n\n"
+            f"<i>Current Text: {label}</i>")
+
+def result_buttons_keyboard(cfg: dict) -> InlineKeyboardMarkup:
+    custom_status = "custom button " + ("✅" if cfg.get("custom_enabled") else "❌")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=small_caps("fixed button"), callback_data="resultcfg:fixed"),
+         InlineKeyboardButton(text=small_caps(custom_status), callback_data="resultcfg:custom_toggle")],
+        [InlineKeyboardButton(text=small_caps("back"), callback_data="resultcfg:back")],
+    ])
+
+def fixed_button_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=small_caps("edit"), callback_data="resultcfg:fixed_edit"),
+         InlineKeyboardButton(text=small_caps("see"), callback_data="resultcfg:fixed_see")],
+        [InlineKeyboardButton(text=small_caps("default"), callback_data="resultcfg:fixed_default")],
+        [InlineKeyboardButton(text=small_caps("back"), callback_data="resultcfg:home")],
+    ])
+
 def start_settings_text(cfg: dict) -> str:
-    caption_state = "✅" if cfg.get("caption_custom") else "❌"
-    media_state = "✅" if cfg.get("media_type") and cfg.get("media_file_id") else "❌"
+    caption_state = "Added ✅" if cfg.get("caption_custom") else "Default ✨"
+    media_state = "Added ✅" if cfg.get("media_type") and cfg.get("media_file_id") else "None ❌"
     about_state = "Enabled ✅" if cfg.get("about_enabled", True) else "Disabled ❌"
-    return ui("<b><u>START MESSAGE</u></b>\n\n"
-              "<i>Customize your bot's start message using the following options.</i>\n\n"
-              f"<i>Caption: {'Added ✅' if caption_state == '✅' else 'Default ✨'}</i>\n"
-              f"<i>Media: {'Added ✅' if media_state == '✅' else 'None ❌'}</i>\n"
-              f"<i>About: {about_state}</i>")
+    return ("<b><i>START MESSAGE</i></b>\n\n"
+            "<i>Customize your bot's start message using the following options.</i>\n\n"
+            f"<i>Caption: {caption_state}</i>\n"
+            f"<i>Media: {media_state}</i>\n"
+            f"<i>About: {about_state}</i>")
 
 def caption_settings_keyboard(has_caption: bool) -> InlineKeyboardMarkup:
     if has_caption:
@@ -329,26 +420,36 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool):
 
     session["task"] = asyncio.create_task(expire())
 
-async def copy_to_data_channel(message: Message) -> int:
+async def copy_to_data_channel(message: Message, fixed_url: str) -> int:
     copied = await bot.copy_message(
         chat_id=DATA_CHANNEL_ID,
         from_chat_id=message.chat.id,
         message_id=message.message_id,
-        reply_markup=message.reply_markup,
+    )
+    label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+    await bot.edit_message_reply_markup(
+        chat_id=DATA_CHANNEL_ID,
+        message_id=copied.message_id,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=label, url=fixed_url)]
+        ]),
     )
     return copied.message_id
 
 async def deliver_saved(chat_id: int, message_id: int, reply_to: Message | None = None):
-    # Forward the canonical saved post instead of copying it. Telegram preserves
-    # eligible inline keyboards on forwarded bot-authored messages (notably URL
-    # buttons), while copy_message without an explicit reply_markup drops them.
+    # The fixed URL is stored only in the canonical channel post's inline keyboard.
     kwargs = {"chat_id": chat_id, "from_chat_id": DATA_CHANNEL_ID, "message_id": message_id}
     if reply_to is not None:
         kwargs["reply_parameters"] = ReplyParameters(
             message_id=reply_to.message_id,
             allow_sending_without_reply=True,
         )
-    await bot.forward_message(**kwargs)
+    forwarded = await bot.forward_message(**kwargs)
+    markup = result_keyboard_from_source(forwarded.reply_markup, get_result_button_settings())
+    if markup:
+        await bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=forwarded.message_id, reply_markup=markup
+        )
 
 def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
     start = page * 10
