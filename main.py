@@ -8,6 +8,7 @@ from html import escape, unescape
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters
 from flask import Flask
@@ -111,28 +112,40 @@ def parse_names(value: str) -> list[str]:
     return names
 
 def register_user(user_id: int):
+    # Store new registrations individually; continue reading the legacy all_users record.
     users_collection.update_one(
-        {"_id": "all_users"},
-        [{"$set": {
-            "id": {
-                "$let": {
-                    "vars": {"old": {"$ifNull": ["$id", ""]}},
-                    "in": {
-                        "$cond": [
-                            {"$in": [str(user_id), {"$split": ["$$old", ","]}]},
-                            "$$old",
-                            {"$cond": [{"$eq": ["$$old", ""]}, str(user_id), {"$concat": ["$$old", ",", str(user_id)]}]}
-                        ]
-                    }
-                }
-            }
-        }}],
+        {"_id": f"user:{user_id}"},
+        {"$set": {"active": True}},
         upsert=True,
     )
 
 def get_user_ids() -> list[int]:
-    doc = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
-    return [int(x) for x in doc.get("id", "").split(",") if x.isdigit()]
+    legacy = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
+    ids = {int(value) for value in legacy.get("id", "").split(",") if value.isdigit()}
+    active_docs = list(users_collection.find(
+        {"_id": {"$regex": "^user:"}, "active": True}, {"_id": 1}
+    ))
+    inactive_docs = list(users_collection.find(
+        {"_id": {"$regex": "^user:"}, "active": False}, {"_id": 1}
+    ))
+    ids.update(
+        int(doc["_id"].split(":", 1)[1])
+        for doc in active_docs
+        if doc.get("_id", "").split(":")[-1].isdigit()
+    )
+    inactive = {
+        int(doc["_id"].split(":", 1)[1])
+        for doc in inactive_docs
+        if doc.get("_id", "").split(":")[-1].isdigit()
+    }
+    return sorted(ids - inactive)
+
+def deactivate_user(user_id: int):
+    users_collection.update_one(
+        {"_id": f"user:{user_id}"},
+        {"$set": {"active": False}},
+        upsert=True,
+    )
 
 def load_search_catalog() -> list[dict]:
     # One MongoDB aggregation fetches anime links and the shared custom-button config.
@@ -199,13 +212,14 @@ def match_anime(query: str, catalog: list[dict]):
     return best_doc if best_score >= threshold else None
 
 
-def find_anime(query: str):
-    return match_anime(query, load_search_catalog())
+async def find_anime(query: str):
+    catalog = await asyncio.to_thread(load_search_catalog)
+    return match_anime(query, catalog)
 
 
-def find_animes(queries: list[str]) -> dict[str, dict | None]:
-    # All alias duplicate checks share a single database round trip.
-    catalog = load_search_catalog()
+async def find_animes(queries: list[str]) -> dict[str, dict | None]:
+    # All alias duplicate checks share one database round trip off the event loop.
+    catalog = await asyncio.to_thread(load_search_catalog)
     return {query: match_anime(query, catalog) for query in queries}
 
 START_SETTINGS_ID = "start_message"
@@ -689,7 +703,8 @@ async def start_handler(message: Message):
             previous_session = await begin_owner_command(owner_id)
         elif not is_owner(message.from_user.id):
             await cancel_broadcast_wait(message.from_user.id, notify=True)
-        register_user(message.from_user.id)
+        if is_private_chat(message.chat):
+            register_user(message.from_user.id)
     panel = await send_start_page(message)
     if owner_id is not None:
         await track_owner_ui(owner_id, panel, "panel")
@@ -1279,18 +1294,34 @@ async def pin_broadcast_handler(message: Message):
 
 async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, int, int, int]:
     delivered = failed = pinned = pin_failed = 0
-    for user_id in get_user_ids():
-        try:
-            copied = await bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=source.chat.id,
-                message_id=source.message_id,
-                reply_markup=source.reply_markup,
-            )
-            delivered += 1
-        except Exception:
-            failed += 1
-            log.exception("Broadcast failed for Telegram user %s", user_id)
+    for user_id in await asyncio.to_thread(get_user_ids):
+        copied = None
+        for attempt in range(4):
+            try:
+                copied = await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=source.chat.id,
+                    message_id=source.message_id,
+                    reply_markup=source.reply_markup,
+                )
+                delivered += 1
+                break
+            except TelegramRetryAfter as exc:
+                if attempt < 3:
+                    await asyncio.sleep(float(exc.retry_after) + 0.5)
+                    continue
+                failed += 1
+                log.warning("Broadcast rate limit retries exhausted for Telegram user %s", user_id)
+            except TelegramForbiddenError:
+                failed += 1
+                await asyncio.to_thread(deactivate_user, user_id)
+                log.info("Deactivated blocked Telegram user %s", user_id)
+                break
+            except Exception:
+                failed += 1
+                log.exception("Broadcast failed for Telegram user %s", user_id)
+                break
+        if copied is None:
             continue
 
         if pin:
@@ -1524,7 +1555,7 @@ async def all_messages_handler(message: Message):
                 return await send_owner_prompt(user_id, session, "<i>Send at least one anime name.</i>")
             session["key"] = ", ".join(names)
             # Use the same fuzzy alias matcher as public search to prevent near-duplicate records.
-            matches = find_animes(names)
+            matches = await find_animes(names)
             duplicates = [name for name in names if matches.get(name)]
             if duplicates:
                 await clear_owner_interaction_messages(session, message)
@@ -1667,7 +1698,7 @@ async def all_messages_handler(message: Message):
         return
 
     if message.text and not message.text.startswith("/"):
-        match = find_anime(message.text)
+        match = await find_anime(message.text)
         if match:
             if is_owner(user_id) and is_private_chat(message.chat):
                 try:
@@ -1727,6 +1758,8 @@ async def main():
     while True:
         try:
             await asyncio.to_thread(mongo.admin.command, "ping")
+            await asyncio.to_thread(anime_collection.create_index, [("id", 1)], name="anime_id_idx")
+            await asyncio.to_thread(anime_collection.create_index, [("key", 1)], name="anime_key_idx")
             runtime_state["database"] = "connected"
             log.info("MongoDB connection established; database=%s", DATABASE_NAME)
             break
