@@ -56,8 +56,6 @@ bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 health_app = Flask(__name__)
 runtime_state = {"database": "connecting", "telegram": "starting"}
-commands_panels: dict[int, tuple[int, int]] = {}
-setstart_panels: dict[int, tuple[int, int]] = {}
 bot_profile = None
 
 @health_app.get("/")
@@ -735,8 +733,6 @@ async def commands_handler(message: Message):
         link_preview_options={"is_disabled": True},
     )
 
-    old_panel = commands_panels.get(owner_id)
-    commands_panels[owner_id] = (new_panel.chat.id, new_panel.message_id)
     await track_owner_ui(owner_id, new_panel, "panel")
     await finish_owner_command(owner_id, previous_session, (new_panel.chat.id, new_panel.message_id))
 
@@ -745,12 +741,6 @@ async def commands_handler(message: Message):
         await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
     except Exception:
         log.debug("Could not delete /commands request")
-
-    if old_panel:
-        try:
-            await bot.delete_message(chat_id=old_panel[0], message_id=old_panel[1])
-        except Exception:
-            log.debug("Could not delete previous /commands panel")
 
 
 @dp.message(Command("setstart"))
