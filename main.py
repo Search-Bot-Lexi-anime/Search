@@ -1360,6 +1360,11 @@ async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, in
                         continue
                     pin_failed += 1
                     log.warning("Pin retries exhausted for Telegram user %s", user_id)
+                except TelegramForbiddenError:
+                    pin_failed += 1
+                    await asyncio.to_thread(deactivate_user, user_id)
+                    log.info("Deactivated blocked Telegram user %s after pin failure", user_id)
+                    break
                 except Exception:
                     pin_failed += 1
                     log.warning("Broadcast delivered but pin failed for Telegram user %s", user_id, exc_info=True)
