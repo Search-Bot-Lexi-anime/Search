@@ -70,6 +70,15 @@ def run_health_server():
 def is_owner(user_id: int) -> bool:
     return str(user_id) in OWNER_IDS
 
+def is_private_chat(chat) -> bool:
+    return bool(chat and chat.type == "private")
+
+async def delete_command_message(message: Message):
+    try:
+        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    except Exception:
+        log.debug("Could not delete group management command")
+
 def ui(value: str) -> str:
     # Italicize only plain text. Preserve every message that already contains formatting.
     if re.search(r"</?(?:b|strong|i|em|u|s|strike|code|pre|a|blockquote|tg-spoiler)(?:\s|>)", value, re.I):
@@ -598,12 +607,14 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
-    owner_id = message.from_user.id if message.from_user and is_owner(message.from_user.id) else None
+    owner_id = message.from_user.id if (
+        message.from_user and is_owner(message.from_user.id) and is_private_chat(message.chat)
+    ) else None
     previous_session = None
     if message.from_user:
         if owner_id is not None:
             previous_session = await begin_owner_command(owner_id)
-        else:
+        elif not is_owner(message.from_user.id):
             await cancel_broadcast_wait(message.from_user.id, notify=True)
         register_user(message.from_user.id)
     panel = await send_start_page(message)
@@ -619,6 +630,9 @@ async def start_handler(message: Message):
 @dp.message(Command("commands"))
 async def commands_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
+        return
+    if not is_private_chat(message.chat):
+        await delete_command_message(message)
         return
     owner_id = message.from_user.id
     previous_session = await begin_owner_command(owner_id)
@@ -671,6 +685,8 @@ async def refresh_start_settings(callback: CallbackQuery):
 async def settings_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    if not is_private_chat(callback.message.chat):
+        return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
 
     action = callback.data.split(":", 1)[1]
     chat_id, panel_id = callback.message.chat.id, callback.message.message_id
@@ -746,6 +762,8 @@ async def settings_callback(callback: CallbackQuery):
 async def startcfg_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    if not is_private_chat(callback.message.chat):
+        return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     action = callback.data.split(":", 1)[1]
     cfg = get_start_settings()
 
@@ -857,6 +875,8 @@ async def startcfg_callback(callback: CallbackQuery):
 async def resultcfg_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    if not is_private_chat(callback.message.chat):
+        return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     action = callback.data.split(":", 1)[1]
@@ -951,6 +971,9 @@ async def start_back_callback(callback: CallbackQuery):
 async def add_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+    if not is_private_chat(message.chat):
+        await delete_command_message(message)
+        return
     previous_session = await begin_owner_command(message.from_user.id)
     panel = await open_owner_panel(
         message.from_user.id,
@@ -978,6 +1001,9 @@ async def add_handler(message: Message):
 async def show_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+    if not is_private_chat(message.chat):
+        await delete_command_message(message)
+        return
     previous_session = await begin_owner_command(message.from_user.id)
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
@@ -1012,6 +1038,8 @@ async def show_handler(message: Message):
 async def page_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    if not is_private_chat(callback.message.chat):
+        return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     page = int(callback.data.split(":", 1)[1])
@@ -1030,6 +1058,8 @@ async def page_callback(callback: CallbackQuery):
 async def anime_detail_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    if not is_private_chat(callback.message.chat):
+        return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     _, message_id, page_raw = callback.data.split(":", 2)
@@ -1053,6 +1083,8 @@ async def anime_detail_callback(callback: CallbackQuery):
 async def anime_link_edit_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    if not is_private_chat(callback.message.chat):
+        return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     _, anime_id, page_raw = callback.data.split(":", 2)
     if not anime_collection.find_one({"id": anime_id}, {"_id": 1}):
         return await callback.answer("Record not found.", show_alert=True)
@@ -1079,6 +1111,8 @@ async def anime_link_edit_callback(callback: CallbackQuery):
 async def replace_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
+    if not is_private_chat(callback.message.chat):
+        return await callback.answer("Settings are available only in the owner's private chat.", show_alert=True)
     previous_session = await begin_owner_command(callback.from_user.id)
     old_id = callback.data.split(":", 1)[1]
     doc = anime_collection.find_one({"id": old_id}, {"key": 1, "id": 1})
@@ -1101,6 +1135,9 @@ async def replace_callback(callback: CallbackQuery):
 async def broadcast_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+    if not is_private_chat(message.chat):
+        await delete_command_message(message)
+        return
     previous_session = await begin_owner_command(message.from_user.id)
     panel = await open_owner_panel(
         message.from_user.id,
@@ -1132,6 +1169,9 @@ async def broadcast_handler(message: Message):
 async def pin_broadcast_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+    if not is_private_chat(message.chat):
+        await delete_command_message(message)
+        return
     previous_session = await begin_owner_command(message.from_user.id)
     panel = await open_owner_panel(
         message.from_user.id,
@@ -1196,7 +1236,10 @@ async def all_messages_handler(message: Message):
     user_id = message.from_user.id
 
     # A new command cancels an active input flow before the command can be mistaken for user input.
-    if is_owner(user_id) and message.text and message.text.startswith("/") and (user_id in pending or user_id in pending_broadcast):
+    if is_owner(user_id) and message.text and message.text.startswith("/") and (
+        (user_id in pending and pending[user_id].get("settings_chat_id") == message.chat.id) or
+        (user_id in pending_broadcast and pending_broadcast[user_id].get("chat_id") == message.chat.id)
+    ):
         active_session = pending.get(user_id)
         broadcast_session = pending_broadcast.get(user_id)
         if active_session and active_session.get("settings_message_id"):
@@ -1244,7 +1287,7 @@ async def all_messages_handler(message: Message):
                 await refresh_start_settings_message(session["settings_chat_id"], session["settings_message_id"])
         except Exception:
             log.exception("Could not refresh /setstart panel after saving")
-    if is_owner(user_id) and user_id in pending and pending[user_id].get("stage") in (
+    if is_owner(user_id) and user_id in pending and pending[user_id].get("settings_chat_id") == message.chat.id and pending[user_id].get("stage") in (
         "start_caption", "start_media", "start_button_text", "start_button_url"
     ):
         session = pending[user_id]
@@ -1311,7 +1354,7 @@ async def all_messages_handler(message: Message):
             return
 
 
-    if is_owner(user_id) and user_id in pending:
+    if is_owner(user_id) and user_id in pending and pending[user_id].get("settings_chat_id") == message.chat.id:
         session = pending[user_id]
         session["last_input_message_id"] = message.message_id
         session.setdefault("input_message_ids", []).append(message.message_id)
@@ -1457,7 +1500,10 @@ async def all_messages_handler(message: Message):
                 await edit_owner_panel(session, "<i>Could not save the post and Fixed Button. The existing record was left unchanged.</i>")
             return
 
-    if is_owner(user_id) and message.text and message.text.startswith("/"):
+    if is_owner(user_id) and message.text and message.text.startswith("/") and (
+        (user_id in pending and pending[user_id].get("settings_chat_id") == message.chat.id) or
+        (user_id in pending_broadcast and pending_broadcast[user_id].get("chat_id") == message.chat.id)
+    ):
         active_session = pending.get(user_id)
         broadcast_session = pending_broadcast.get(user_id)
         panel_ref = None
@@ -1484,7 +1530,7 @@ async def all_messages_handler(message: Message):
                 log.debug("Could not restore the owner panel after cancelling an input")
         return
 
-    if is_owner(user_id) and user_id in pending_broadcast and not (message.text or "").startswith("/"):
+    if is_owner(user_id) and user_id in pending_broadcast and pending_broadcast[user_id].get("chat_id") == message.chat.id and not (message.text or "").startswith("/"):
         session = pending_broadcast.pop(user_id)
         task = session.get("task")
         if task:
@@ -1515,8 +1561,7 @@ async def all_messages_handler(message: Message):
     if message.text and not message.text.startswith("/"):
         match = find_anime(message.text)
         if match:
-            # Owners receive the management/settings panel instead of the public saved post.
-            if is_owner(user_id):
+            if is_owner(user_id) and is_private_chat(message.chat):
                 try:
                     await deliver_saved(
                         chat_id=message.chat.id,
