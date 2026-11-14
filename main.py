@@ -160,7 +160,9 @@ def get_result_button_settings() -> dict:
 
 def button_label_text(value: str) -> str:
     # Telegram inline keyboard labels are plain text and cannot render HTML.
-    return unescape(re.sub(r"<[^>]*>", "", str(value or ""))).strip()[:64]
+    plain = unescape(str(value or ""))
+    plain = re.sub(r"<[^>]*>", "", plain)
+    return plain.strip()[:64]
 
 def result_keyboard_from_source(source_markup, cfg: dict):
     fixed_url = None
