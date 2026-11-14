@@ -292,7 +292,7 @@ def start_buttons_text(cfg: dict) -> str:
         f"<i>Button {idx}: {'ON ✅' if cfg.get(f'button{idx}_text') and cfg.get(f'button{idx}_url') else 'OFF ❌'}</i>"
         for idx in range(1, 5)
     )
-    return ui("<b><i><u>START BUTTONS</u></i></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" + statuses)
+    return ui("<b><u>START BUTTONS</u></b>\n\n<i>Customize buttons shown with your start message.</i>\n\n" + statuses)
 
 def result_buttons_text(cfg: dict) -> str:
     custom_state = "Enabled ✅" if cfg.get("custom_enabled") else "Disabled ❌"
@@ -353,7 +353,7 @@ def start_settings_text(cfg: dict) -> str:
     caption_state = "Added ✅" if cfg.get("caption_custom") else "Default ✨"
     media_state = "Added ✅" if cfg.get("media_type") and cfg.get("media_file_id") else "None ❌"
     about_state = "Enabled ✅" if cfg.get("about_enabled", True) else "Disabled ❌"
-    return (f"<b><i><u>SETTINGS</u></i></b> {bot_mention_text()}\n\n"
+    return (f"<b><u>SETTINGS</u></b> {bot_mention_text()}\n\n"
             "<i>Customize start message using the following options below.</i>\n\n"
             f"<i>Caption: {caption_state}</i>\n"
             f"<i>Media: {media_state}</i>\n"
@@ -687,7 +687,7 @@ async def startcfg_callback(callback: CallbackQuery):
 
     if action == "caption":
         await callback.message.edit_text(
-            ui("<b><i><u>CAPTION</u></i></b>\n\n<i>Customize your bot's start message Caption.</i>"),
+            ui("<b><u>CAPTION</u></b>\n\n<i>Customize your bot's start message Caption.</i>"),
             reply_markup=caption_settings_keyboard(bool(cfg.get("caption_custom")))
         )
         return await callback.answer()
@@ -718,7 +718,7 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media":
         has_media = bool(cfg.get("media_type") and cfg.get("media_file_id"))
         await callback.message.edit_text(
-            ui("<b><i><u>MEDIA</u></i></b>\n\n<i>Include an image or GIF with your start message.</i>"),
+            ui("<b><u>MEDIA</u></b>\n\n<i>Include an image or GIF with your start message.</i>"),
             reply_markup=media_settings_keyboard(has_media)
         )
         return await callback.answer()
