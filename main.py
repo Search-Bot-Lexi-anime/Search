@@ -883,8 +883,12 @@ async def startcfg_callback(callback: CallbackQuery):
         return await refresh_start_settings(callback)
 
     if action == "about_toggle":
-        bot_settings_collection.update_one({"_id": START_SETTINGS_ID},
-            {"$set": {"about_enabled": not cfg.get("about_enabled", True)}}, upsert=True)
+        await asyncio.to_thread(
+            bot_settings_collection.update_one,
+            {"_id": START_SETTINGS_ID},
+            {"$set": {"about_enabled": not cfg.get("about_enabled", True)}},
+            upsert=True,
+        )
         await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
         return await callback.answer("✨ About setting updated.")
 
@@ -904,7 +908,8 @@ async def startcfg_callback(callback: CallbackQuery):
         return await callback.answer(re.sub(r"<[^>]*>", "", unescape(caption))[:190], show_alert=True)
 
     if action == "caption_default":
-        bot_settings_collection.update_one(
+        await asyncio.to_thread(
+            bot_settings_collection.update_one,
             {"_id": START_SETTINGS_ID}, {"$unset": {"text": "", "caption_custom": ""}}
         )
         await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
@@ -935,7 +940,8 @@ async def startcfg_callback(callback: CallbackQuery):
         return
 
     if action == "media_remove":
-        bot_settings_collection.update_one(
+        await asyncio.to_thread(
+            bot_settings_collection.update_one,
             {"_id": START_SETTINGS_ID},
             {"$unset": {"media_type": "", "media_file_id": ""}},
         )
@@ -949,7 +955,8 @@ async def startcfg_callback(callback: CallbackQuery):
         label = (cfg.get(f"button{idx}_text") or "").strip()
         url = (cfg.get(f"button{idx}_url") or "").strip()
         if label and url:
-            bot_settings_collection.update_one(
+            await asyncio.to_thread(
+                bot_settings_collection.update_one,
                 {"_id": START_SETTINGS_ID},
                 {"$unset": {f"button{idx}_text": "", f"button{idx}_url": ""}},
             )
@@ -992,7 +999,8 @@ async def resultcfg_callback(callback: CallbackQuery):
         label = button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
         return await callback.answer(label[:190], show_alert=True)
     if action == "fixed_default":
-        bot_settings_collection.update_one(
+        await asyncio.to_thread(
+            bot_settings_collection.update_one,
             {"_id": RESULT_BUTTONS_ID}, {"$unset": {"fixed_button_text": ""}}, upsert=True
         )
         cfg = await asyncio.to_thread(get_result_button_settings)
@@ -1012,7 +1020,8 @@ async def resultcfg_callback(callback: CallbackQuery):
         return
     if action == "custom_toggle":
         if cfg.get("custom_enabled"):
-            bot_settings_collection.update_one(
+            await asyncio.to_thread(
+                bot_settings_collection.update_one,
                 {"_id": RESULT_BUTTONS_ID}, {"$set": {"custom_enabled": False}}, upsert=True
             )
             cfg = await asyncio.to_thread(get_result_button_settings)
@@ -1400,7 +1409,7 @@ async def all_messages_handler(message: Message):
     async def refresh_start_panel(session):
         try:
             if session.get("settings_page") == "buttons":
-                cfg_now = get_start_settings()
+                cfg_now = await asyncio.to_thread(get_start_settings)
                 await bot.edit_message_text(start_buttons_text(cfg_now), chat_id=session["settings_chat_id"],
                     message_id=session["settings_message_id"], reply_markup=start_buttons_keyboard(cfg_now))
             else:
@@ -1420,7 +1429,8 @@ async def all_messages_handler(message: Message):
             if not value:
                 return await send_owner_prompt(user_id, session, "<b>INVALID CAPTION</b>\nSend text only.")
             try:
-                await bot_settings_collection.update_one(
+                await asyncio.to_thread(
+                    bot_settings_collection.update_one,
                     {"_id": START_SETTINGS_ID}, {"$set": {"text": value, "caption_custom": True}}, upsert=True
                 )
             except Exception:
@@ -1438,7 +1448,8 @@ async def all_messages_handler(message: Message):
                 media_type, media_id = "animation", message.animation.file_id
             else:
                 return await send_owner_prompt(user_id, session, "<b>INVALID MEDIA</b>\nPlease send a photo or GIF.")
-            bot_settings_collection.update_one(
+            await asyncio.to_thread(
+                bot_settings_collection.update_one,
                 {"_id": START_SETTINGS_ID},
                 {"$set": {"media_type": media_type, "media_file_id": media_id}},
                 upsert=True
@@ -1463,7 +1474,8 @@ async def all_messages_handler(message: Message):
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<b>INVALID LINK</b>\nSend a valid http:// or https:// URL.")
             idx, label = session["button"], session["label"]
-            bot_settings_collection.update_one(
+            await asyncio.to_thread(
+                bot_settings_collection.update_one,
                 {"_id": START_SETTINGS_ID},
                 {"$set": {f"button{idx}_text": label, f"button{idx}_url": url}},
                 upsert=True
@@ -1484,7 +1496,8 @@ async def all_messages_handler(message: Message):
             label = (message.text or "").strip()
             if not label or len(label) > 64:
                 return await send_owner_prompt(user_id, session, "<i>Send a button label between 1 and 64 characters.</i>")
-            bot_settings_collection.update_one(
+            await asyncio.to_thread(
+                bot_settings_collection.update_one,
                 {"_id": RESULT_BUTTONS_ID}, {"$set": {"fixed_button_text": label}}, upsert=True
             )
             await clear_owner_interaction_messages(session, message)
@@ -1507,7 +1520,8 @@ async def all_messages_handler(message: Message):
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
-            bot_settings_collection.update_one(
+            await asyncio.to_thread(
+                bot_settings_collection.update_one,
                 {"_id": RESULT_BUTTONS_ID},
                 {"$set": {
                     "custom_enabled": True,
@@ -1529,7 +1543,8 @@ async def all_messages_handler(message: Message):
             if not await asyncio.to_thread(anime_collection.find_one, {"id": session["anime_id"]}, {"_id": 1}):
                 return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
             try:
-                result = anime_collection.update_one(
+                result = await asyncio.to_thread(
+                    anime_collection.update_one,
                     {"id": session["anime_id"]},
                     {"$set": {"link": url}},
                 )
@@ -1613,14 +1628,18 @@ async def all_messages_handler(message: Message):
                     ]),
                 )
                 if stage == "fixed_url":
-                    anime_collection.insert_one({
-                        "key": session["key"],
-                        "id": str(new_message_id),
-                        "link": url,
-                    })
+                    await asyncio.to_thread(
+                        anime_collection.insert_one,
+                        {
+                            "key": session["key"],
+                            "id": str(new_message_id),
+                            "link": url,
+                        },
+                    )
                     success_text = "✨ Anime record and Fixed Button link saved successfully."
                 else:
-                    result = anime_collection.update_one(
+                    result = await asyncio.to_thread(
+                        anime_collection.update_one,
                         {"id": session["anime_id"]},
                         {"$set": {"id": str(new_message_id), "link": url}},
                     )
