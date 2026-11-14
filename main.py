@@ -447,7 +447,38 @@ async def finish_owner_command(user_id: int, previous_session: dict | None, keep
 
 async def track_owner_ui(user_id: int, message: Message, kind: str = "prompt"):
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
-    state["panels" if kind == "panel" else "prompts"].append((message.chat.id, message.message_id))
+    bucket = state["panels" if kind == "panel" else "prompts"]
+    ref = (message.chat.id, message.message_id)
+    state["prompts"] = [item for item in state["prompts"] if item != ref]
+    state["panels"] = [item for item in state["panels"] if item != ref]
+    bucket.append(ref)
+
+async def open_owner_panel(user_id: int, chat_id: int, text: str, reply_markup=None) -> Message:
+    state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
+    panels = state.get("panels", [])
+    if panels:
+        old_chat_id, old_message_id = panels[-1]
+        if old_chat_id == chat_id:
+            try:
+                panel = await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=old_message_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    link_preview_options={"is_disabled": True},
+                )
+                await track_owner_ui(user_id, panel, "panel")
+                return panel
+            except Exception:
+                log.debug("Could not edit the current owner panel; creating a fresh one")
+    panel = await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        link_preview_options={"is_disabled": True},
+    )
+    await track_owner_ui(user_id, panel, "panel")
+    return panel
 
 async def cleanup_owner_ui(user_id: int, keep: tuple[int, int] | None = None):
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
@@ -880,13 +911,13 @@ async def add_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     previous_session = await begin_owner_command(message.from_user.id)
-    panel = await bot.send_message(
-        chat_id=message.chat.id,
-        text="<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+    panel = await open_owner_panel(
+        message.from_user.id,
+        message.chat.id,
+        "<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>",
+        InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
         ]),
-        link_preview_options={"is_disabled": True},
     )
     pending[message.from_user.id] = {
         "stage": "names",
@@ -909,15 +940,14 @@ async def show_handler(message: Message):
     previous_session = await begin_owner_command(message.from_user.id)
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     if not docs:
-        prompt = await bot.send_message(
-            chat_id=message.chat.id,
-            text=ui("<b><i>SAVED ANIME</i></b>\n\n<i>No anime records have been added yet.</i>"),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        prompt = await open_owner_panel(
+            message.from_user.id,
+            message.chat.id,
+            ui("<b><i>SAVED ANIME</i></b>\n\n<i>No anime records have been added yet.</i>"),
+            InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
             ]),
-            link_preview_options={"is_disabled": True},
         )
-        await track_owner_ui(message.from_user.id, prompt, "panel")
         await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
         try:
             await bot.delete_message(message.chat.id, message.message_id)
@@ -925,12 +955,12 @@ async def show_handler(message: Message):
             log.debug("Could not delete /show command")
         return
     total_pages = max(1, (len(docs) + 9) // 10)
-    panel = await bot.send_message(
-        chat_id=message.chat.id,
-        text=ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\n<i>Select a title to view its details.</i>"),
-        reply_markup=anime_list_markup(docs, 0),
+    panel = await open_owner_panel(
+        message.from_user.id,
+        message.chat.id,
+        ui(f"<b><i>SAVED ANIME</i></b> — {len(docs)} records\n<i>Page 1 of {total_pages} · Showing 1–{min(10, len(docs))}</i>\n<i>Select a title to view its details.</i>"),
+        anime_list_markup(docs, 0),
     )
-    await track_owner_ui(message.from_user.id, panel, "panel")
     await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
@@ -1003,15 +1033,14 @@ async def broadcast_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     previous_session = await begin_owner_command(message.from_user.id)
-    panel = await bot.send_message(
-        chat_id=message.chat.id,
-        text=ui("<b><i>BROADCAST</i></b>\n\n" + ("Broadcasting replied message..." if message.reply_to_message else "Send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds.")),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+    panel = await open_owner_panel(
+        message.from_user.id,
+        message.chat.id,
+        ui("<b><i>BROADCAST</i></b>\n\n" + ("Broadcasting replied message..." if message.reply_to_message else "Send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds.")),
+        InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
         ]),
-        link_preview_options={"is_disabled": True},
     )
-    await track_owner_ui(message.from_user.id, panel, "panel")
     await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
@@ -1035,15 +1064,14 @@ async def pin_broadcast_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     previous_session = await begin_owner_command(message.from_user.id)
-    panel = await bot.send_message(
-        chat_id=message.chat.id,
-        text=ui("<b><i>PIN BROADCAST</i></b>\n\n" + ("Broadcasting and pinning replied message..." if message.reply_to_message else "Send the message to broadcast and pin. Its media, formatting and inline buttons will be copied. You have 30 seconds.")),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+    panel = await open_owner_panel(
+        message.from_user.id,
+        message.chat.id,
+        ui("<b><i>PIN BROADCAST</i></b>\n\n" + ("Broadcasting and pinning replied message..." if message.reply_to_message else "Send the message to broadcast and pin. Its media, formatting and inline buttons will be copied. You have 30 seconds.")),
+        InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
         ]),
-        link_preview_options={"is_disabled": True},
     )
-    await track_owner_ui(message.from_user.id, panel, "panel")
     await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
