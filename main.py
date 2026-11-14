@@ -49,6 +49,7 @@ db = mongo[DATABASE_NAME]
 anime_collection = db["anime"]
 users_collection = db["users"]
 bot_settings_collection = db["bot_settings"]
+owner_ui_collection = db["owner_ui"]
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -274,11 +275,24 @@ async def send_owner_prompt(user_id: int, session: dict, text: str) -> Message:
     await track_owner_ui(user_id, prompt, "panel")
     return prompt
 
+async def delete_pending_data_post(session: dict):
+    message_id = session.get("new_id")
+    if not message_id:
+        return
+    session.pop("new_id", None)
+    try:
+        await bot.delete_message(chat_id=DATA_CHANNEL_ID, message_id=int(message_id))
+    except Exception:
+        log.debug("Could not delete cancelled temporary data-channel post")
+
+
 async def clear_pending_for_panel(user_id: int, panel_message_id: int):
     session = pending.get(user_id)
-    if session and session.get("settings_message_id") == panel_message_id:
-        pending.pop(user_id, None)
-        await clear_owner_interaction_messages(session)
+    broadcast = pending_broadcast.get(user_id)
+    pending_matches = bool(session and session.get("settings_message_id") == panel_message_id)
+    broadcast_matches = bool(broadcast and broadcast.get("panel_message_id") == panel_message_id)
+    if pending_matches or broadcast_matches:
+        await cancel_owner_process(user_id)
 DEFAULT_START = {
     "_id": START_SETTINGS_ID,
     "text": "<b><i>Welcome, {mention}!</i></b>\n<i>I'm {bot_name}, your anime search companion. Search an anime name to find it if it is available.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
@@ -421,13 +435,13 @@ def start_settings_text(cfg: dict) -> str:
             f"<i>Media: {media_state}</i>\n"
             f"<i>About: {about_state}</i>")
 def caption_settings_keyboard(has_caption: bool) -> InlineKeyboardMarkup:
-    if has_caption:
-        rows = [[
-            InlineKeyboardButton(text=small_caps("edit"), callback_data="startcfg:caption_edit"),
-            InlineKeyboardButton(text=small_caps("show"), callback_data="startcfg:caption_show"),
-        ]]
-    else:
-        rows = [[InlineKeyboardButton(text="✚ " + small_caps("add"), callback_data="startcfg:caption_edit")]]
+    rows = [[
+        InlineKeyboardButton(
+            text=small_caps("edit") if has_caption else "✚ " + small_caps("add"),
+            callback_data="startcfg:caption_edit",
+        ),
+        InlineKeyboardButton(text=small_caps("show"), callback_data="startcfg:caption_show"),
+    ]]
     rows.extend([
         [InlineKeyboardButton(text=small_caps("default"), callback_data="startcfg:caption_default")],
         [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data="startcfg:home")],
@@ -485,12 +499,13 @@ async def cancel_broadcast_wait(user_id: int, notify: bool = False):
 async def cancel_owner_process(user_id: int, notify_broadcast: bool = False):
     session = pending.pop(user_id, None)
     if session:
+        await delete_pending_data_post(session)
         await clear_owner_interaction_messages(session)
     await cancel_broadcast_wait(user_id, notify=notify_broadcast)
 
 async def begin_owner_command(user_id: int):
-    session = pending.pop(user_id, None)
-    await cancel_broadcast_wait(user_id)
+    session = pending.get(user_id)
+    await cancel_owner_process(user_id)
     return session
 
 async def finish_owner_command(user_id: int, previous_session: dict | None, keep: tuple[int, int]):
@@ -500,29 +515,54 @@ async def finish_owner_command(user_id: int, previous_session: dict | None, keep
 
 async def track_owner_ui(user_id: int, message: Message, kind: str = "prompt"):
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
-    ref = (message.chat.id, message.message_id)
-    state["prompts"] = [item for item in state["prompts"] if item != ref]
-    state["panels"] = [item for item in state["panels"] if item != ref]
-    state["panels" if kind == "panel" else "prompts"].append(ref)
+    ref = {"chat_id": message.chat.id, "message_id": message.message_id}
+    doc_id = str(user_id)
+    saved = await asyncio.to_thread(owner_ui_collection.find_one, {"_id": doc_id}) or {}
+    if kind == "panel":
+        previous = saved.get("panel")
+        stale = list(saved.get("previous_panels", []))
+        if previous and previous != ref and previous not in stale:
+            stale.append(previous)
+        await asyncio.to_thread(
+            owner_ui_collection.update_one,
+            {"_id": doc_id},
+            {"$set": {"panel": ref, "previous_panels": stale}},
+            upsert=True,
+        )
+        state["panels"] = [(message.chat.id, message.message_id)]
+    else:
+        prompts = list(saved.get("prompts", []))
+        if ref not in prompts:
+            prompts.append(ref)
+        await asyncio.to_thread(
+            owner_ui_collection.update_one,
+            {"_id": doc_id},
+            {"$set": {"prompts": prompts}},
+            upsert=True,
+        )
+        state["prompts"] = [(item["chat_id"], item["message_id"]) for item in prompts]
+
 
 async def open_owner_panel(user_id: int, chat_id: int, text: str, reply_markup=None) -> Message:
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
-    panels = state.get("panels", [])
-    if panels:
-        old_chat_id, old_message_id = panels[-1]
-        if old_chat_id == chat_id:
-            try:
-                panel = await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=old_message_id,
-                    text=text,
-                    reply_markup=reply_markup,
-                    link_preview_options={"is_disabled": True},
-                )
-                await track_owner_ui(user_id, panel, "panel")
-                return panel
-            except Exception:
-                log.debug("Could not edit the current owner panel; creating a fresh one")
+    saved = await asyncio.to_thread(owner_ui_collection.find_one, {"_id": str(user_id)}) or {}
+    panel_ref = saved.get("panel")
+    if not panel_ref and state.get("panels"):
+        old_chat_id, old_message_id = state["panels"][-1]
+        panel_ref = {"chat_id": old_chat_id, "message_id": old_message_id}
+    if panel_ref and panel_ref.get("chat_id") == chat_id:
+        try:
+            panel = await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=panel_ref["message_id"],
+                text=text,
+                reply_markup=reply_markup,
+                link_preview_options={"is_disabled": True},
+            )
+            await track_owner_ui(user_id, panel, "panel")
+            return panel
+        except Exception:
+            log.debug("Could not edit the current owner panel; creating a fresh one")
     panel = await bot.send_message(
         chat_id=chat_id,
         text=text,
@@ -534,16 +574,49 @@ async def open_owner_panel(user_id: int, chat_id: int, text: str, reply_markup=N
 
 async def cleanup_owner_ui(user_id: int, keep: tuple[int, int] | None = None):
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
-    old_items = state["prompts"] + state["panels"]
-    state["prompts"], state["panels"] = [], []
-    for chat_id, message_id in old_items:
-        if keep == (chat_id, message_id):
-            state["panels"].append((chat_id, message_id))
+    saved = await asyncio.to_thread(owner_ui_collection.find_one, {"_id": str(user_id)}) or {}
+    refs = []
+    refs.extend(saved.get("prompts", []))
+    refs.extend(saved.get("previous_panels", []))
+    if saved.get("panel"):
+        refs.append(saved["panel"])
+    refs.extend(
+        {"chat_id": chat_id, "message_id": message_id}
+        for chat_id, message_id in state.get("prompts", []) + state.get("panels", [])
+    )
+    unique, seen = [], set()
+    for ref in refs:
+        key = (ref.get("chat_id"), ref.get("message_id"))
+        if key[0] is not None and key[1] is not None and key not in seen:
+            seen.add(key)
+            unique.append(ref)
+
+    failed_prompts, failed_panels = [], []
+    kept_panel = None
+    saved_prompts = saved.get("prompts", [])
+    for ref in unique:
+        key = (ref["chat_id"], ref["message_id"])
+        if keep == key:
+            kept_panel = ref
             continue
         try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+            await bot.delete_message(chat_id=key[0], message_id=key[1])
         except Exception:
             log.debug("Could not delete previous owner prompt/panel")
+            (failed_prompts if ref in saved_prompts else failed_panels).append(ref)
+
+    await asyncio.to_thread(
+        owner_ui_collection.update_one,
+        {"_id": str(user_id)},
+        {"$set": {
+            "panel": kept_panel,
+            "prompts": failed_prompts,
+            "previous_panels": failed_panels,
+        }},
+        upsert=True,
+    )
+    state["prompts"] = [(item["chat_id"], item["message_id"]) for item in failed_prompts]
+    state["panels"] = [(kept_panel["chat_id"], kept_panel["message_id"])] if kept_panel else []
 
 async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool, panel_message_id: int):
     await cancel_owner_process(user_id)
@@ -665,7 +738,22 @@ async def commands_handler(message: Message):
 
 @dp.message(Command("setstart"))
 async def setstart_handler(message: Message):
-    await commands_handler(message)
+    if not message.from_user or not is_owner(message.from_user.id):
+        return
+    if not is_private_chat(message.chat):
+        await delete_command_message(message)
+        return
+    user_id = message.from_user.id
+    previous_session = await begin_owner_command(user_id)
+    cfg = get_start_settings()
+    panel = await open_owner_panel(
+        user_id,
+        message.chat.id,
+        start_settings_text(cfg),
+        start_settings_keyboard(cfg),
+    )
+    await finish_owner_command(user_id, previous_session, (panel.chat.id, panel.message_id))
+    await delete_command_message(message)
 
 async def refresh_start_settings_message(chat_id: int, message_id: int):
     cfg = get_start_settings()
@@ -744,7 +832,6 @@ async def settings_callback(callback: CallbackQuery):
 
     if action in ("broadcast", "pbroadcast"):
         pin = action == "pbroadcast"
-        pending.pop(callback.from_user.id, None)
         await start_broadcast_wait(callback.from_user.id, chat_id, pin=pin, panel_message_id=panel_id)
         await callback.message.edit_text(
             ui("<b><i>PIN BROADCAST</i></b>\n\n<i>Send the message to broadcast and pin. You have 30 seconds.</i>" if pin
@@ -1570,12 +1657,10 @@ async def all_messages_handler(message: Message):
                     )
                 except Exception:
                     log.exception("Could not deliver saved anime result to owner")
-                settings_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text=small_caps("replace"),
-                        callback_data=f"replace:{match['id']}",
-                    )
-                ]])
+                settings_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{match['id']}")],
+                    [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")],
+                ])
                 panel_state = owner_ui_state.get(user_id, {})
                 current_panels = panel_state.get("panels", [])
                 if current_panels:
