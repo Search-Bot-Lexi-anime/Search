@@ -334,7 +334,7 @@ def settings_home_text() -> str:
 
 def settings_home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✚ " + small_caps("add ✚"), callback_data="settings:add"),
+        [InlineKeyboardButton(text="✚ " + small_caps("add"), callback_data="settings:add"),
          InlineKeyboardButton(text=small_caps("show added"), callback_data="settings:show")],
         [InlineKeyboardButton(text=small_caps("start message"), callback_data="settings:start"),
          InlineKeyboardButton(text=small_caps("buttons"), callback_data="settings:results")],
