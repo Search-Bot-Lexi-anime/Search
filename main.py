@@ -854,17 +854,8 @@ async def startcfg_callback(callback: CallbackQuery):
     action = callback.data.split(":", 1)[1]
     cfg = get_start_settings()
 
+    await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
-    session = pending.get(callback.from_user.id)
-    if session and session.get("settings_message_id") == callback.message.message_id:
-        pending.pop(callback.from_user.id, None)
-        message_ids = set(session.get("prompt_message_ids", [])) | set(session.get("input_message_ids", []))
-        message_ids.update(message_id for message_id in (session.get("prompt_message_id"), session.get("last_input_message_id")) if message_id)
-        for message_id in message_ids:
-            try:
-                await bot.delete_message(session["settings_chat_id"], message_id)
-            except Exception:
-                log.debug("Could not clear previous /setstart interaction message")
 
     if action == "settings_home":
         await callback.message.edit_text(
@@ -1493,12 +1484,26 @@ async def all_messages_handler(message: Message):
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
-            result = anime_collection.update_one(
-                {"id": session["anime_id"]},
-                {"$set": {"link": url}},
-            )
-            if not result.matched_count:
+            if not anime_collection.find_one({"id": session["anime_id"]}, {"_id": 1}):
                 return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
+            try:
+                result = anime_collection.update_one(
+                    {"id": session["anime_id"]},
+                    {"$set": {"link": url}},
+                )
+                if not result.matched_count:
+                    return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
+                label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+                await bot.edit_message_reply_markup(
+                    chat_id=DATA_CHANNEL_ID,
+                    message_id=int(session["anime_id"]),
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=label, url=url)]
+                    ]),
+                )
+            except Exception:
+                log.exception("Could not update anime fixed link")
+                return await send_owner_prompt(user_id, session, "<i>Could not update the Fixed Button link. Please try again.</i>")
             await clear_owner_interaction_messages(session, message)
             pending.pop(user_id, None)
             await edit_owner_panel(
@@ -1553,38 +1558,54 @@ async def all_messages_handler(message: Message):
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link for the Fixed Button.</i>")
+            new_message_id = int(session["new_id"])
             try:
+                label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+                await bot.edit_message_reply_markup(
+                    chat_id=DATA_CHANNEL_ID,
+                    message_id=new_message_id,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=label, url=url)]
+                    ]),
+                )
                 if stage == "fixed_url":
                     anime_collection.insert_one({
                         "key": session["key"],
-                        "id": str(session["new_id"]),
+                        "id": str(new_message_id),
                         "link": url,
                     })
                     success_text = "✨ Anime record and Fixed Button link saved successfully."
                 else:
                     result = anime_collection.update_one(
                         {"id": session["anime_id"]},
-                        {"$set": {"id": str(session["new_id"]), "link": url}},
+                        {"$set": {"id": str(new_message_id), "link": url}},
                     )
                     if not result.matched_count:
                         raise RuntimeError("Anime record to replace was not found")
-                    try:
-                        await bot.delete_message(DATA_CHANNEL_ID, int(session["anime_id"]))
-                    except Exception:
-                        log.debug("Could not delete replaced canonical post")
                     success_text = "✨ Replacement saved successfully."
-                await clear_owner_interaction_messages(session, message)
-                pending.pop(user_id, None)
-                await edit_owner_panel(session, success_text)
             except Exception:
-                log.exception("Anime post/fixed button save failed")
-                try:
-                    await bot.delete_message(DATA_CHANNEL_ID, session["new_id"])
-                except Exception:
-                    pass
+                log.exception("Anime post/fixed button save failed before database commit")
+                await delete_pending_data_post(session)
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
                 await edit_owner_panel(session, "<i>Could not save the post and Fixed Button. The existing record was left unchanged.</i>")
+                return
+
+            # The database now points to the new canonical post. Never delete it because
+            # a later UI edit failed; that would leave a broken record.
+            old_anime_id = session.get("anime_id") if stage == "replace_fixed_url" else None
+            pending.pop(user_id, None)
+            session.pop("new_id", None)
+            await clear_owner_interaction_messages(session, message)
+            if old_anime_id:
+                try:
+                    await bot.delete_message(DATA_CHANNEL_ID, int(old_anime_id))
+                except Exception:
+                    log.debug("Could not delete replaced canonical post after successful replacement")
+            try:
+                await edit_owner_panel(session, success_text)
+            except Exception:
+                log.exception("Record saved, but the owner panel could not be refreshed")
             return
 
     if is_owner(user_id) and message.text and message.text.startswith("/") and (
