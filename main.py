@@ -1262,6 +1262,8 @@ async def main():
                 BotCommand(command="add", description=small_caps("Add anime record")),
                 BotCommand(command="show", description=small_caps("Show anime records")),
                 BotCommand(command="settings", description=small_caps("Open bot settings")),
+                BotCommand(command="commands", description=small_caps("Open bot settings")),
+                BotCommand(command="setstart", description=small_caps("Open bot settings")),
                 BotCommand(command="broadcast", description=small_caps("Broadcast a message")),
                 BotCommand(command="pbroadcast", description=small_caps("Broadcast and pin a message")),
             ]
