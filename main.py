@@ -346,7 +346,7 @@ def start_settings_text(cfg: dict) -> str:
     caption_state = "Added ✅" if cfg.get("caption_custom") else "Default ✨"
     media_state = "Added ✅" if cfg.get("media_type") and cfg.get("media_file_id") else "None ❌"
     about_state = "Enabled ✅" if cfg.get("about_enabled", True) else "Disabled ❌"
-    return ("<b><i>START MESSAGE</i></b>\n\n"
+    return ("<b><u>SETTINGS</u></b> {bot_mention}\n\n"
             "<i>Customize start message using the following options below.</i>\n\n"
             f"<i>Caption: {caption_state}</i>\n"
             f"<i>Media: {media_state}</i>\n"
