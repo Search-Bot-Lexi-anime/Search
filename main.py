@@ -383,7 +383,9 @@ async def cancel_broadcast_wait(user_id: int, notify: bool = False):
             await bot.send_message(session["chat_id"], ui("✨ Broadcast cancelled."))
 
 async def cancel_owner_process(user_id: int, notify_broadcast: bool = False):
-    pending.pop(user_id, None)
+    session = pending.pop(user_id, None)
+    if session:
+        await clear_owner_interaction_messages(session)
     await cancel_broadcast_wait(user_id, notify=notify_broadcast)
 
 async def track_owner_ui(user_id: int, message: Message, kind: str = "prompt"):
@@ -1074,38 +1076,142 @@ async def all_messages_handler(message: Message):
 
     if is_owner(user_id) and user_id in pending:
         session = pending[user_id]
-        if session["stage"] == "names":
+        session["last_input_message_id"] = message.message_id
+        session.setdefault("input_message_ids", []).append(message.message_id)
+        stage = session["stage"]
+
+        if stage == "fixed_button_text":
+            label = (message.text or "").strip()
+            if not label or len(label) > 64:
+                return await message.answer(ui("<i>Send a button label between 1 and 64 characters.</i>"))
+            bot_settings_collection.update_one(
+                {"_id": RESULT_BUTTONS_ID}, {"$set": {"fixed_button_text": label}}, upsert=True
+            )
+            await clear_owner_interaction_messages(session, message)
+            pending.pop(user_id, None)
+            cfg = get_result_button_settings()
+            await bot.edit_message_text(
+                fixed_button_text(cfg), chat_id=session["settings_chat_id"],
+                message_id=session["settings_message_id"], reply_markup=fixed_button_keyboard()
+            )
+            notice = await message.answer(ui("✨ Successfully Updated New Fixed Button Text."))
+            await track_owner_ui(user_id, notice)
+            return
+
+        if stage == "custom_button_text":
+            label = (message.text or "").strip()
+            if not label or len(label) > 64:
+                return await message.answer(ui("<i>Send a custom button label between 1 and 64 characters.</i>"))
+            session["custom_label"] = label
+            session["stage"] = "custom_button_url"
+            await clear_owner_interaction_messages(session, message)
+            await send_owner_prompt(user_id, session, "Now Send Link For Custom Button.")
+            return
+
+        if stage == "custom_button_url":
+            url = (message.text or "").strip()
+            if not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+                return await message.answer(ui("<i>Send a valid http:// or https:// link.</i>"))
+            bot_settings_collection.update_one(
+                {"_id": RESULT_BUTTONS_ID},
+                {"$set": {
+                    "custom_enabled": True,
+                    "custom_button_text": session["custom_label"],
+                    "custom_button_url": url,
+                }},
+                upsert=True,
+            )
+            await clear_owner_interaction_messages(session, message)
+            pending.pop(user_id, None)
+            cfg = get_result_button_settings()
+            await bot.edit_message_text(
+                result_buttons_text(cfg), chat_id=session["settings_chat_id"],
+                message_id=session["settings_message_id"], reply_markup=result_buttons_keyboard(cfg)
+            )
+            notice = await message.answer(ui("✨ Start Message Button Added Successfully.."))
+            await track_owner_ui(user_id, notice)
+            return
+
+        if stage == "names":
             names = parse_names(message.text or message.caption or "")
             if not names:
-                return await message.answer(ui("Send at least one anime name."))
+                return await message.answer(ui("<i>Send at least one anime name.</i>"))
             session["key"] = ", ".join(names)
-            session["stage"] = "post"
-            return await message.answer(ui("Names received. Now send the original post with its media and buttons."))
-        if session["stage"] in ("post", "replace_post"):
-            try:
-                new_id = await copy_to_data_channel(message)
-                if session["stage"] == "post":
-                    existing_names = set()
-                    for record in anime_collection.find({}, {"key": 1}):
-                        existing_names.update(clean_query(x) for x in record.get("key", "").split(","))
-                    if any(clean_query(x) in existing_names for x in session["key"].split(",")):
-                        await bot.delete_message(DATA_CHANNEL_ID, new_id)
-                        await message.answer(ui("One or more names already exist. Use /show and Replace to update an existing record."))
-                    else:
-                        anime_collection.insert_one({"key": session["key"], "id": str(new_id)})
-                        await message.answer(ui("✨ Anime record saved successfully."))
-                else:
-                    result = anime_collection.update_one({"id": session["anime_id"]}, {"$set": {"id": str(new_id)}})
-                    if result.matched_count:
-                        await message.answer(ui("✨ Replacement saved successfully."))
-                    else:
-                        await bot.delete_message(DATA_CHANNEL_ID, new_id)
-                        await message.answer(ui("Original record was not found; existing data was left unchanged."))
-            except Exception:
-                log.exception("Anime post save/replace failed")
-                await message.answer(ui("Could not save the post. The existing database record was not changed."))
-            finally:
+            existing_names = set()
+            for record in anime_collection.find({}, {"key": 1}):
+                existing_names.update(clean_query(x) for x in record.get("key", "").split(","))
+            duplicates = [name for name in names if clean_query(name) in existing_names]
+            if duplicates:
+                await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
+                notice = await message.answer(ui("<i>One or more names already match a saved anime. Use /show to inspect existing records.</i>"))
+                await track_owner_ui(user_id, notice)
+                return
+            session["stage"] = "post"
+            await clear_owner_interaction_messages(session, message)
+            await send_owner_prompt(user_id, session, "Now send the original anime post. The bot will add the Fixed Button automatically.")
+            return
+
+        if stage in ("post", "replace_post"):
+            try:
+                new_id = await bot.copy_message(
+                    chat_id=DATA_CHANNEL_ID,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id,
+                )
+                session["new_id"] = new_id.message_id
+                session["stage"] = "replace_fixed_url" if stage == "replace_post" else "fixed_url"
+                await clear_owner_interaction_messages(session, message)
+                await send_owner_prompt(user_id, session, "Now send the link for Fixed Button.")
+            except Exception:
+                log.exception("Could not copy anime post to data channel")
+                await clear_owner_interaction_messages(session, message)
+                pending.pop(user_id, None)
+                notice = await message.answer(ui("<i>Could not save the post. Please try again.</i>"))
+                await track_owner_ui(user_id, notice)
+            return
+
+        if stage in ("fixed_url", "replace_fixed_url"):
+            url = (message.text or "").strip()
+            if not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+                return await message.answer(ui("<i>Send a valid http:// or https:// link for the Fixed Button.</i>"))
+            try:
+                label = button_label_text(get_result_button_settings().get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+                await bot.edit_message_reply_markup(
+                    chat_id=DATA_CHANNEL_ID,
+                    message_id=session["new_id"],
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=label, url=url)]
+                    ]),
+                )
+                if stage == "fixed_url":
+                    anime_collection.insert_one({"key": session["key"], "id": str(session["new_id"])})
+                    success_text = "✨ Anime record saved successfully."
+                else:
+                    result = anime_collection.update_one(
+                        {"id": session["anime_id"]}, {"$set": {"id": str(session["new_id"])}}
+                    )
+                    if not result.matched_count:
+                        raise RuntimeError("Anime record to replace was not found")
+                    try:
+                        await bot.delete_message(DATA_CHANNEL_ID, int(session["anime_id"]))
+                    except Exception:
+                        log.debug("Could not delete replaced canonical post")
+                    success_text = "✨ Replacement saved successfully."
+                await clear_owner_interaction_messages(session, message)
+                pending.pop(user_id, None)
+                notice = await message.answer(ui(success_text))
+                await track_owner_ui(user_id, notice)
+            except Exception:
+                log.exception("Anime post/fixed button save failed")
+                try:
+                    await bot.delete_message(DATA_CHANNEL_ID, session["new_id"])
+                except Exception:
+                    pass
+                await clear_owner_interaction_messages(session, message)
+                pending.pop(user_id, None)
+                notice = await message.answer(ui("<i>Could not save the post and Fixed Button. The existing record was left unchanged.</i>"))
+                await track_owner_ui(user_id, notice)
             return
 
     if is_owner(user_id) and message.text and message.text.startswith("/"):
