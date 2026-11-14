@@ -480,6 +480,7 @@ async def start_handler(message: Message):
         await cleanup_owner_ui(owner_id, keep=(panel.chat.id, panel.message_id))
         await track_owner_ui(owner_id, panel, "panel")
 
+@dp.message(Command("settings"))
 @dp.message(Command("commands"))
 async def commands_handler(message: Message):
     if message.from_user:
@@ -678,6 +679,66 @@ async def startcfg_callback(callback: CallbackQuery):
         await track_owner_ui(callback.from_user.id, prompt)
         return
 
+    await callback.answer("Unknown setting.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("resultcfg:"))
+async def resultcfg_callback(callback: CallbackQuery):
+    if not callback.from_user or not is_owner(callback.from_user.id):
+        return await callback.answer("Owner only.", show_alert=True)
+    await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
+    action = callback.data.split(":", 1)[1]
+    cfg = get_result_button_settings()
+
+    if action == "home":
+        await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
+        return await callback.answer()
+    if action == "back":
+        await refresh_start_settings_message(callback.message.chat.id, callback.message.message_id)
+        return await callback.answer()
+    if action == "fixed":
+        await callback.message.edit_text(fixed_button_text(cfg), reply_markup=fixed_button_keyboard())
+        return await callback.answer()
+    if action == "fixed_see":
+        label = button_label_text(cfg.get("fixed_button_text") or DEFAULT_FIXED_BUTTON_TEXT)
+        return await callback.answer(label[:190], show_alert=True)
+    if action == "fixed_default":
+        bot_settings_collection.update_one(
+            {"_id": RESULT_BUTTONS_ID}, {"$unset": {"fixed_button_text": ""}}, upsert=True
+        )
+        cfg = get_result_button_settings()
+        await callback.message.edit_text(fixed_button_text(cfg), reply_markup=fixed_button_keyboard())
+        return await callback.answer("Successfully Restored to default ♻️", show_alert=True)
+    if action == "fixed_edit":
+        pending[callback.from_user.id] = {
+            "stage": "fixed_button_text",
+            "settings_chat_id": callback.message.chat.id,
+            "settings_message_id": callback.message.message_id,
+            "input_message_ids": [],
+            "prompt_message_ids": [],
+        }
+        await callback.answer()
+        await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
+                                "Send The New Fixed Button text.")
+        return
+    if action == "custom_toggle":
+        if cfg.get("custom_enabled"):
+            bot_settings_collection.update_one(
+                {"_id": RESULT_BUTTONS_ID}, {"$set": {"custom_enabled": False}}, upsert=True
+            )
+            cfg = get_result_button_settings()
+            await callback.message.edit_text(result_buttons_text(cfg), reply_markup=result_buttons_keyboard(cfg))
+            return await callback.answer("✨ Custom Button Disabled.")
+        pending[callback.from_user.id] = {
+            "stage": "custom_button_text",
+            "settings_chat_id": callback.message.chat.id,
+            "settings_message_id": callback.message.message_id,
+            "input_message_ids": [],
+            "prompt_message_ids": [],
+        }
+        await callback.answer()
+        await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
+                                "Send text for Custom Button.")
+        return
     await callback.answer("Unknown setting.", show_alert=True)
 
 @dp.callback_query(F.data == "start:about")
@@ -1108,9 +1169,9 @@ async def main():
             owner_commands = [
                 BotCommand(command="add", description=small_caps("Add anime record")),
                 BotCommand(command="show", description=small_caps("Show anime records")),
+                BotCommand(command="settings", description=small_caps("Open bot settings")),
                 BotCommand(command="broadcast", description=small_caps("Broadcast a message")),
                 BotCommand(command="pbroadcast", description=small_caps("Broadcast and pin a message")),
-                BotCommand(command="setstart", description=small_caps("Configure start message")),
             ]
             for owner_id in OWNER_IDS:
                 await bot.set_my_commands(
