@@ -117,6 +117,19 @@ def register_user(user_id: int):
         upsert=True,
     )
 
+def migrate_legacy_users():
+    legacy = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
+    legacy_ids = [value for value in legacy.get("id", "").split(",") if value.isdigit()]
+    for value in legacy_ids:
+        users_collection.update_one(
+            {"_id": f"user:{value}"},
+            {"$setOnInsert": {"active": True}},
+            upsert=True,
+        )
+    if legacy.get("id"):
+        users_collection.update_one({"_id": "all_users"}, {"$unset": {"id": ""}})
+
+
 def get_user_ids() -> list[int]:
     legacy = users_collection.find_one({"_id": "all_users"}, {"id": 1}) or {}
     ids = {int(value) for value in legacy.get("id", "").split(",") if value.isdigit()}
@@ -1807,6 +1820,7 @@ async def main():
     while True:
         try:
             await asyncio.to_thread(mongo.admin.command, "ping")
+            await asyncio.to_thread(migrate_legacy_users)
             await asyncio.to_thread(anime_collection.create_index, [("id", 1)], name="anime_id_idx")
             await asyncio.to_thread(anime_collection.create_index, [("key", 1)], name="anime_key_idx")
             runtime_state["database"] = "connected"
