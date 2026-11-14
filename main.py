@@ -324,10 +324,17 @@ def fixed_button_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=small_caps("back"), callback_data="resultcfg:home")],
     ])
 
+def bot_mention_text() -> str:
+    # bot_profile is populated during startup before owner settings can be opened.
+    if bot_profile and bot_profile.username:
+        return f'<a href="https://t.me/{escape(bot_profile.username)}">{escape(bot_profile.full_name)}</a>'
+    return escape(bot_profile.full_name) if bot_profile else "Bot"
+
+
 def settings_home_text() -> str:
     anime_count = anime_collection.count_documents({})
     users_count = len(get_user_ids())
-    return ("<b><i>BOT SETTINGS</i></b>\n\n"
+    return (f"<b><i><u>BOT SETTINGS</u></i></b> {bot_mention_text()}\n\n"
             "<i>Access/Manage Bot using the following options below.</i>\n\n"
             f"<i>Saved Anime: {anime_count}</i>\n"
             f"<i>Users: {users_count}</i>")
@@ -346,7 +353,7 @@ def start_settings_text(cfg: dict) -> str:
     caption_state = "Added ✅" if cfg.get("caption_custom") else "Default ✨"
     media_state = "Added ✅" if cfg.get("media_type") and cfg.get("media_file_id") else "None ❌"
     about_state = "Enabled ✅" if cfg.get("about_enabled", True) else "Disabled ❌"
-    return ("<b><u>SETTINGS</u></b> {bot_mention}\n\n"
+    return (f"<b><i><u>SETTINGS</u></i></b> {bot_mention_text()}\n\n"
             "<i>Customize start message using the following options below.</i>\n\n"
             f"<i>Caption: {caption_state}</i>\n"
             f"<i>Media: {media_state}</i>\n"
