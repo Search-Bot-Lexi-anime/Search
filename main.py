@@ -1034,18 +1034,46 @@ async def anime_detail_callback(callback: CallbackQuery):
     await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     _, message_id, page_raw = callback.data.split(":", 2)
     page = int(page_raw)
-    doc = anime_collection.find_one({"id": message_id}, {"key": 1, "id": 1})
+    doc = anime_collection.find_one({"id": message_id}, {"key": 1, "id": 1, "link": 1})
     if not doc:
         return await callback.answer("Record not found.", show_alert=True)
+    link_state = "Saved ✅" if doc.get("link") else "Missing ❌"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=small_caps("edit fixed link"), callback_data=f"anime_link_edit:{message_id}:{page}")],
         [InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{message_id}")],
         [InlineKeyboardButton(text="❮❮ " + small_caps("back"), callback_data=f"page:{page}")],
     ])
     await callback.message.edit_text(
-        ui(f"<b><i>ANIME NAMES</i></b>\n{escape(doc['key'])}\n\n<b><i>STATUS</i></b>\n<i>Saved and ready to replace.</i>"),
+        ui(f"<b><i>ANIME NAMES</i></b>\n{escape(doc['key'])}\n\n<b><i>FIXED LINK</i></b>\n<i>{link_state}</i>"),
         reply_markup=keyboard,
     )
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("anime_link_edit:"))
+async def anime_link_edit_callback(callback: CallbackQuery):
+    if not callback.from_user or not is_owner(callback.from_user.id):
+        return await callback.answer("Owner only.", show_alert=True)
+    _, anime_id, page_raw = callback.data.split(":", 2)
+    if not anime_collection.find_one({"id": anime_id}, {"_id": 1}):
+        return await callback.answer("Record not found.", show_alert=True)
+    previous_session = await begin_owner_command(callback.from_user.id)
+    session = {
+        "stage": "anime_link",
+        "anime_id": anime_id,
+        "page": int(page_raw),
+        "settings_chat_id": callback.message.chat.id,
+        "settings_message_id": callback.message.message_id,
+        "input_message_ids": [],
+        "prompt_message_ids": [],
+    }
+    pending[callback.from_user.id] = session
+    await send_owner_prompt(callback.from_user.id, session, "Send the Fixed Button URL for this anime.")
+    await finish_owner_command(
+        callback.from_user.id, previous_session,
+        (callback.message.chat.id, callback.message.message_id),
+    )
+    await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("replace:"))
 async def replace_callback(callback: CallbackQuery):
@@ -1329,6 +1357,30 @@ async def all_messages_handler(message: Message):
             pending.pop(user_id, None)
             cfg = get_result_button_settings()
             await edit_owner_panel(session, result_buttons_text(cfg), result_buttons_keyboard(cfg))
+            return
+
+        if stage == "anime_link":
+            url = (message.text or "").strip()
+            if not re.fullmatch(r"https?://[^\\s]+", url, re.I):
+                return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
+            result = anime_collection.update_one(
+                {"id": session["anime_id"]},
+                {"$set": {"link": url}},
+            )
+            if not result.matched_count:
+                return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
+            await clear_owner_interaction_messages(session, message)
+            pending.pop(user_id, None)
+            await edit_owner_panel(
+                session,
+                "<b><u>FIXED LINK SAVED</u></b>\\n\\n<i>This anime's Fixed Button URL has been saved.</i>",
+                InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="❮❮ " + small_caps("back to anime"),
+                        callback_data=f"anime:{session['anime_id']}:{session['page']}",
+                    )]
+                ]),
+            )
             return
 
         if stage == "names":
