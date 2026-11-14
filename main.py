@@ -1544,8 +1544,6 @@ async def all_messages_handler(message: Message):
             url = (message.text or "").strip()
             if not re.fullmatch(r"https?://[^\s]+", url, re.I):
                 return await send_owner_prompt(user_id, session, "<i>Send a valid http:// or https:// link.</i>")
-            if not await asyncio.to_thread(anime_collection.find_one, {"id": session["anime_id"]}, {"_id": 1}):
-                return await send_owner_prompt(user_id, session, "<i>Anime record not found. Please reopen its details.</i>")
             old_doc = await asyncio.to_thread(
                 anime_collection.find_one,
                 {"id": session["anime_id"]},
@@ -1578,7 +1576,7 @@ async def all_messages_handler(message: Message):
                         InlineKeyboardMarkup(inline_keyboard=[
                             [InlineKeyboardButton(text=label, url=old_url)]
                         ])
-                        if re.fullmatch(r"https?://[^\\s]+", old_url, re.I)
+                        if re.fullmatch(r"https?://[^\s]+", old_url, re.I)
                         else None
                     )
                     await bot.edit_message_reply_markup(
