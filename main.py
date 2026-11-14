@@ -447,11 +447,10 @@ async def finish_owner_command(user_id: int, previous_session: dict | None, keep
 
 async def track_owner_ui(user_id: int, message: Message, kind: str = "prompt"):
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
-    bucket = state["panels" if kind == "panel" else "prompts"]
     ref = (message.chat.id, message.message_id)
     state["prompts"] = [item for item in state["prompts"] if item != ref]
     state["panels"] = [item for item in state["panels"] if item != ref]
-    bucket.append(ref)
+    state["panels" if kind == "panel" else "prompts"].append(ref)
 
 async def open_owner_panel(user_id: int, chat_id: int, text: str, reply_markup=None) -> Message:
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
@@ -657,15 +656,11 @@ async def settings_callback(callback: CallbackQuery):
             "stage": "names", "settings_chat_id": chat_id, "settings_message_id": panel_id,
             "input_message_ids": [], "prompt_message_ids": [],
         }
-        await callback.message.edit_text(
-            ui("<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
-            ]),
-        )
         await callback.answer()
-        await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
-                                "Send all alternate anime names, separated by commas or new lines.")
+        await send_owner_prompt(
+            callback.from_user.id, pending[callback.from_user.id],
+            "<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>",
+        )
         return
 
     if action == "show":
