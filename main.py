@@ -128,24 +128,46 @@ def find_anime(query: str):
     q = clean_query(query)
     if not q:
         return None
-    best_doc, best_score = None, 0
+
+    best_doc, best_score = None, -1
+    q_words = q.split()
+
     for doc in anime_collection.find({}, {"key": 1, "id": 1}):
         for alias in doc.get("key", "").split(","):
             candidate = clean_query(alias)
             if not candidate:
                 continue
+
             if candidate == q:
                 return doc
-            q_words, c_words = q.split(), candidate.split()
-            if candidate.startswith(q) or any(word.startswith(q) for word in c_words):
-                score = 100 if len(q) >= 3 else 90
-            elif all(any(word.startswith(qw) for word in c_words) for qw in q_words):
-                score = 96 if len(q) >= 5 else 86
-            else:
-                score = max(fuzz.WRatio(q, candidate), fuzz.partial_ratio(q, candidate),
-                            fuzz.token_set_ratio(q, candidate), fuzz.ratio(q, candidate))
+
+            c_words = candidate.split()
+            score = max(
+                fuzz.WRatio(q, candidate),
+                fuzz.ratio(q, candidate),
+                fuzz.partial_ratio(q, candidate),
+                fuzz.token_sort_ratio(q, candidate),
+                fuzz.token_set_ratio(q, candidate),
+            )
+
+            # Prefer candidates that cover more of the words the user actually typed.
+            matched_words = sum(
+                1 for q_word in q_words
+                if any(c_word.startswith(q_word) or fuzz.ratio(q_word, c_word) >= 82
+                       for c_word in c_words)
+            )
+            coverage = matched_words / len(q_words)
+            if coverage == 1:
+                score = max(score, 94 if len(q_words) > 1 else 90)
+            elif coverage >= 0.5:
+                score = max(score, 82 + 10 * coverage)
+
+            if candidate.startswith(q):
+                score = max(score, min(98, 88 + len(q) * 1.2))
+
             if score > best_score:
                 best_doc, best_score = doc, score
+
     threshold = 58 if len(q) >= 7 else 66 if len(q) >= 4 else 82
     return best_doc if best_score >= threshold else None
 
@@ -520,19 +542,15 @@ async def start_broadcast_wait(user_id: int, chat_id: int, pin: bool, panel_mess
     session["task"] = asyncio.create_task(expire())
 
 async def deliver_saved(chat_id: int, message_id: int, reply_to: Message | None = None):
-    # The fixed URL is stored only in the canonical channel post's inline keyboard.
+    # Copy the canonical post so the result has no "Forwarded from" attribution.
+    # Telegram keeps the source post's inline keyboard when no replacement markup is supplied.
     kwargs = {"chat_id": chat_id, "from_chat_id": DATA_CHANNEL_ID, "message_id": message_id}
     if reply_to is not None:
         kwargs["reply_parameters"] = ReplyParameters(
             message_id=reply_to.message_id,
             allow_sending_without_reply=True,
         )
-    forwarded = await bot.forward_message(**kwargs)
-    markup = result_keyboard_from_source(forwarded.reply_markup, get_result_button_settings())
-    if markup:
-        await bot.edit_message_reply_markup(
-            chat_id=chat_id, message_id=forwarded.message_id, reply_markup=markup
-        )
+    await bot.copy_message(**kwargs)
 
 def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
     start = page * 10
@@ -1463,6 +1481,7 @@ async def all_messages_handler(message: Message):
                 await deliver_saved(
                     chat_id=message.chat.id,
                     message_id=int(match["id"]),
+                    reply_to=message,
                 )
             except Exception:
                 log.exception("Could not deliver saved anime message")
