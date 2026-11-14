@@ -201,10 +201,23 @@ async def clear_owner_interaction_messages(session: dict, input_message: Message
     session.pop("last_input_message_id", None)
 
 async def send_owner_prompt(user_id: int, session: dict, text: str) -> Message:
-    prompt = await bot.send_message(chat_id=session["settings_chat_id"], text=ui(text))
-    session.setdefault("prompt_message_ids", []).append(prompt.message_id)
-    session["prompt_message_id"] = prompt.message_id
-    await track_owner_ui(user_id, prompt)
+    chat_id = session["settings_chat_id"]
+    panel_id = session.get("settings_message_id")
+    if panel_id:
+        prompt = await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=panel_id,
+            text=ui(text),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+            ]),
+            link_preview_options={"is_disabled": True},
+        )
+    else:
+        prompt = await bot.send_message(chat_id=chat_id, text=ui(text))
+        session["settings_message_id"] = prompt.message_id
+        session.setdefault("prompt_message_ids", []).clear()
+        await track_owner_ui(user_id, prompt, "panel")
     return prompt
 
 async def clear_pending_for_panel(user_id: int, panel_message_id: int):
@@ -630,11 +643,6 @@ async def settings_callback(callback: CallbackQuery):
                 [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
             ]),
         )
-        prompt = await bot.send_message(
-            chat_id=chat_id,
-            text=ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."),
-        )
-        await track_owner_ui(callback.from_user.id, prompt)
         return await callback.answer()
 
     await callback.answer("Unknown setting.", show_alert=True)
@@ -700,13 +708,9 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "caption_edit":
         pending[callback.from_user.id] = {"stage": "start_caption", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
-        prompt = await bot.send_message(chat_id=callback.message.chat.id, text=
-            ui("<i>Send The New Caption text.</i>\n\n" + caption_variables_help())
-        )
-        pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
-        pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
-        await track_owner_ui(callback.from_user.id, prompt)
+        await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
+                                "<i>Send The New Caption text.</i>\n\n" + caption_variables_help())
         return
 
     if action == "media":
@@ -720,11 +724,9 @@ async def startcfg_callback(callback: CallbackQuery):
     if action == "media_edit":
         pending[callback.from_user.id] = {"stage": "start_media", "settings_chat_id": callback.message.chat.id, "settings_message_id": callback.message.message_id, "input_message_ids": [], "prompt_message_ids": []}
         await callback.answer()
-        prompt = await bot.send_message(chat_id=callback.message.chat.id, text=ui("<i>Only GIFs and images are supported. Send the new start media here.</i>"))
-        pending[callback.from_user.id]["prompt_message_id"] = prompt.message_id
-        pending[callback.from_user.id]["prompt_message_ids"].append(prompt.message_id)
         await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
-        await track_owner_ui(callback.from_user.id, prompt)
+        await send_owner_prompt(callback.from_user.id, pending[callback.from_user.id],
+                                "<i>Only GIFs and images are supported. Send the new start media here.</i>")
         return
 
     if action == "media_remove":
@@ -858,17 +860,23 @@ async def add_handler(message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     previous_session = await begin_owner_command(message.from_user.id)
+    panel = await bot.send_message(
+        chat_id=message.chat.id,
+        text="<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+        ]),
+        link_preview_options={"is_disabled": True},
+    )
     pending[message.from_user.id] = {
         "stage": "names",
         "settings_chat_id": message.chat.id,
+        "settings_message_id": panel.message_id,
         "input_message_ids": [],
         "prompt_message_ids": [],
     }
-    prompt = await send_owner_prompt(
-        message.from_user.id, pending[message.from_user.id],
-        "<b><i>ADD ANIME</i></b>\n\n<i>Send all alternate anime names, separated by commas or new lines. Matching will connect every alias to the saved post.</i>"
-    )
-    await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
+    await track_owner_ui(message.from_user.id, panel, "panel")
+    await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
@@ -971,7 +979,7 @@ async def broadcast_handler(message: Message):
     if message.reply_to_message:
         delivered, failed, _, _ = await broadcast_message(message.reply_to_message)
         result = await bot.send_message(chat_id=message.chat.id, text=ui(f"✨ Broadcast complete. Delivered: {delivered}. Failed: {failed}."))
-        await track_owner_ui(message.from_user.id, result)
+        await track_owner_ui(message.from_user.id, result, "panel")
         await finish_owner_command(message.from_user.id, previous_session, (result.chat.id, result.message_id))
         try:
             await bot.delete_message(message.chat.id, message.message_id)
@@ -979,9 +987,16 @@ async def broadcast_handler(message: Message):
             log.debug("Could not delete /broadcast command")
         return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=False)
-    prompt = await bot.send_message(chat_id=message.chat.id, text=ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
-    await track_owner_ui(message.from_user.id, prompt)
-    await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
+    panel = await bot.send_message(
+        chat_id=message.chat.id,
+        text=ui("<b><i>BROADCAST</i></b>\n\nSend the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+        ]),
+        link_preview_options={"is_disabled": True},
+    )
+    await track_owner_ui(message.from_user.id, panel, "panel")
+    await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
@@ -1006,9 +1021,16 @@ async def pin_broadcast_handler(message: Message):
             log.debug("Could not delete /pbroadcast command")
         return
     await start_broadcast_wait(message.from_user.id, message.chat.id, pin=True)
-    prompt = await bot.send_message(chat_id=message.chat.id, text=ui("Now send the message to broadcast. Its media, formatting and inline buttons will be copied. You have 30 seconds."))
-    await track_owner_ui(message.from_user.id, prompt)
-    await finish_owner_command(message.from_user.id, previous_session, (prompt.chat.id, prompt.message_id))
+    panel = await bot.send_message(
+        chat_id=message.chat.id,
+        text=ui("<b><i>PIN BROADCAST</i></b>\n\nSend the message to broadcast and pin. Its media, formatting and inline buttons will be copied. You have 30 seconds."),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")]
+        ]),
+        link_preview_options={"is_disabled": True},
+    )
+    await track_owner_ui(message.from_user.id, panel, "panel")
+    await finish_owner_command(message.from_user.id, previous_session, (panel.chat.id, panel.message_id))
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
