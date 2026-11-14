@@ -704,7 +704,7 @@ async def start_handler(message: Message):
         elif not is_owner(message.from_user.id):
             await cancel_broadcast_wait(message.from_user.id, notify=True)
         if is_private_chat(message.chat):
-            register_user(message.from_user.id)
+            await asyncio.to_thread(register_user, message.from_user.id)
     panel = await send_start_page(message)
     if owner_id is not None:
         await track_owner_ui(owner_id, panel, "panel")
@@ -1325,16 +1325,25 @@ async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, in
             continue
 
         if pin:
-            try:
-                await bot.pin_chat_message(
-                    chat_id=user_id,
-                    message_id=copied.message_id,
-                    disable_notification=True,
-                )
-                pinned += 1
-            except Exception:
-                pin_failed += 1
-                log.warning("Broadcast delivered but pin failed for Telegram user %s", user_id, exc_info=True)
+            for pin_attempt in range(3):
+                try:
+                    await bot.pin_chat_message(
+                        chat_id=user_id,
+                        message_id=copied.message_id,
+                        disable_notification=True,
+                    )
+                    pinned += 1
+                    break
+                except TelegramRetryAfter as exc:
+                    if pin_attempt < 2:
+                        await asyncio.sleep(float(exc.retry_after) + 0.5)
+                        continue
+                    pin_failed += 1
+                    log.warning("Pin retries exhausted for Telegram user %s", user_id)
+                except Exception:
+                    pin_failed += 1
+                    log.warning("Broadcast delivered but pin failed for Telegram user %s", user_id, exc_info=True)
+                    break
 
     return delivered, failed, pinned, pin_failed
 
@@ -1713,36 +1722,18 @@ async def all_messages_handler(message: Message):
                     [InlineKeyboardButton(text=small_caps("replace"), callback_data=f"replace:{match['id']}")],
                     [InlineKeyboardButton(text="❮❮ " + small_caps("back to settings"), callback_data="settings:home")],
                 ])
-                panel_state = owner_ui_state.get(user_id, {})
-                current_panels = panel_state.get("panels", [])
-                if current_panels:
-                    panel_chat_id, panel_message_id = current_panels[-1]
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=panel_chat_id,
-                            message_id=panel_message_id,
-                            text=ui(
-                                f"<b><i>ANIME SETTINGS</i></b>\n"
-                                f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
-                                f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
-                            ),
-                            reply_markup=settings_keyboard,
-                            link_preview_options={"is_disabled": True},
-                        )
-                    except Exception:
-                        log.debug("Could not edit current owner panel for anime search")
-                else:
-                    panel = await bot.send_message(
-                        chat_id=message.chat.id,
-                        text=ui(
-                            f"<b><i>ANIME SETTINGS</i></b>\n"
-                            f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
-                            f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
-                        ),
-                        reply_markup=settings_keyboard,
-                        link_preview_options={"is_disabled": True},
-                    )
-                    await track_owner_ui(user_id, panel, "panel")
+                anime_panel_text = ui(
+                    f"<b><i>ANIME SETTINGS</i></b>\n"
+                    f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
+                    f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
+                )
+                panel = await open_owner_panel(
+                    user_id,
+                    message.chat.id,
+                    anime_panel_text,
+                    settings_keyboard,
+                )
+                await cleanup_owner_ui(user_id, keep=(panel.chat.id, panel.message_id))
                 return
             try:
                 await deliver_saved(
