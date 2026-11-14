@@ -545,6 +545,7 @@ async def startcfg_callback(callback: CallbackQuery):
     action = callback.data.split(":", 1)[1]
     cfg = get_start_settings()
 
+    await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     session = pending.get(callback.from_user.id)
     if session and session.get("settings_message_id") == callback.message.message_id:
         pending.pop(callback.from_user.id, None)
@@ -654,6 +655,7 @@ async def resultcfg_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
+    await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     action = callback.data.split(":", 1)[1]
     cfg = get_result_button_settings()
 
@@ -800,6 +802,7 @@ async def page_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
+    await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     page = int(callback.data.split(":", 1)[1])
     docs = list(anime_collection.find({}, {"key": 1, "id": 1}).sort("key", 1))
     total_pages = max(1, (len(docs) + 9) // 10)
@@ -817,6 +820,7 @@ async def anime_detail_callback(callback: CallbackQuery):
     if not callback.from_user or not is_owner(callback.from_user.id):
         return await callback.answer("Owner only.", show_alert=True)
     await clear_pending_for_panel(callback.from_user.id, callback.message.message_id)
+    await cleanup_owner_ui(callback.from_user.id, keep=(callback.message.chat.id, callback.message.message_id))
     _, message_id, page_raw = callback.data.split(":", 2)
     page = int(page_raw)
     doc = anime_collection.find_one({"id": message_id}, {"key": 1, "id": 1})
