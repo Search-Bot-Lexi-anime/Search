@@ -1336,8 +1336,30 @@ async def all_messages_handler(message: Message):
             return
 
     if is_owner(user_id) and message.text and message.text.startswith("/"):
-        await cancel_owner_process(user_id, notify_broadcast=True)
-        await cleanup_owner_ui(user_id)
+        active_session = pending.get(user_id)
+        broadcast_session = pending_broadcast.get(user_id)
+        panel_ref = None
+        if active_session and active_session.get("settings_message_id"):
+            panel_ref = (active_session.get("settings_chat_id", message.chat.id), active_session["settings_message_id"])
+        elif broadcast_session and broadcast_session.get("panel_message_id"):
+            panel_ref = (broadcast_session.get("chat_id", message.chat.id), broadcast_session["panel_message_id"])
+        else:
+            panels = owner_ui_state.get(user_id, {}).get("panels", [])
+            if panels:
+                panel_ref = panels[-1]
+        await cancel_owner_process(user_id, notify_broadcast=False)
+        await cleanup_owner_ui(user_id, keep=panel_ref)
+        if panel_ref:
+            try:
+                await bot.edit_message_text(
+                    chat_id=panel_ref[0],
+                    message_id=panel_ref[1],
+                    text=settings_home_text(),
+                    reply_markup=settings_home_keyboard(),
+                    link_preview_options={"is_disabled": True},
+                )
+            except Exception:
+                log.debug("Could not restore the owner panel after cancelling an input")
         return
 
     if is_owner(user_id) and user_id in pending_broadcast and not (message.text or "").startswith("/"):
@@ -1379,14 +1401,36 @@ async def all_messages_handler(message: Message):
                         callback_data=f"replace:{match['id']}",
                     )
                 ]])
-                await bot.send_message(chat_id=message.chat.id, text=
-                    ui(
-                        f"<b><i>ANIME SETTINGS</i></b>\n"
-                        f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
-                        f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
-                    ),
-                    reply_markup=settings_keyboard,
-                )
+                panel_state = owner_ui_state.get(user_id, {})
+                current_panels = panel_state.get("panels", [])
+                if current_panels:
+                    panel_chat_id, panel_message_id = current_panels[-1]
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=panel_chat_id,
+                            message_id=panel_message_id,
+                            text=ui(
+                                f"<b><i>ANIME SETTINGS</i></b>\n"
+                                f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
+                                f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
+                            ),
+                            reply_markup=settings_keyboard,
+                            link_preview_options={"is_disabled": True},
+                        )
+                    except Exception:
+                        log.debug("Could not edit current owner panel for anime search")
+                else:
+                    panel = await bot.send_message(
+                        chat_id=message.chat.id,
+                        text=ui(
+                            f"<b><i>ANIME SETTINGS</i></b>\n"
+                            f"<b>NAMES</b>\n{escape(match.get('key', ''))}\n\n"
+                            f"<b>MANAGEMENT</b>\nUse the button below to replace the assigned anime message."
+                        ),
+                        reply_markup=settings_keyboard,
+                        link_preview_options={"is_disabled": True},
+                    )
+                    await track_owner_ui(user_id, panel, "panel")
                 return
             try:
                 await deliver_saved(
