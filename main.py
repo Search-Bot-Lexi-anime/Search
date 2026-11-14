@@ -214,7 +214,7 @@ async def clear_pending_for_panel(user_id: int, panel_message_id: int):
         await clear_owner_interaction_messages(session)
 DEFAULT_START = {
     "_id": START_SETTINGS_ID,
-    "text": "<b><i>Welcome, {mention}!</i></b>\n<i>I'm {bot_mention}, your anime search companion. Search an anime name to find it if it is available.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
+    "text": "<b><i>Welcome, {mention}!</i></b>\n<i>I'm {bot_name}, your anime search companion. Search an anime name to find it if it is available.</i>\n\n<i>Made for <a href=\"https://t.me/lexianime\">Lexi Anime</a> fans ✨</i>",
     "media_type": None, "media_file_id": None,
     **{f"button{i}_{field}": "" for i in range(1, 5) for field in ("text", "url")},
 }
@@ -234,17 +234,16 @@ async def render_start_text(template: str, user) -> str:
     user_id = user.id if user else 0
     mention = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
     bot_name = escape(me.full_name)
-    bot_mention = f'<a href="tg://resolve?domain={escape(me.username)}">{bot_name}</a>' if me.username else bot_name
     anime = '<a href="https://t.me/lexianime">Lexi Anime</a>'
     for key, value in {
-        "{bot_name}": bot_name, "{bot_mention}": bot_mention,
+        "{bot_name}": bot_name, "{bot_mention}": bot_name,
         "{user_name}": user_name, "{mention}": mention, "{anime}": anime,
     }.items():
         template = template.replace(key, value)
     return template
 
 def caption_variables_help() -> str:
-    variables = ("{bot_name}", "{bot_mention}", "{user_name}", "{mention}", "{anime}")
+    variables = ("{bot_name}", "{user_name}", "{mention}", "{anime}")
     return "<i>Available variables (tap to copy):</i>\n" + "\n".join(
         f"<code>{escape(item)}</code>" for item in variables
     )
@@ -327,13 +326,13 @@ def fixed_button_keyboard() -> InlineKeyboardMarkup:
 def bot_mention_text() -> str:
     # bot_profile is populated during startup before owner settings can be opened.
     if bot_profile and bot_profile.username:
-        return f'<a href="https://t.me/{escape(bot_profile.username)}">{escape(bot_profile.full_name)}</a>'
+        return f'<a href="tg://resolve?domain={escape(bot_profile.username)}">{escape(bot_profile.full_name)}</a>'
     return escape(bot_profile.full_name) if bot_profile else "Bot"
 
 
 def settings_home_text() -> str:
     return ("<b><u>SETTINGS</u></b>\n\n"
-            f"✰ Name: {bot_mention_text()}\n\n"
+            f"<i>✰ Name: {bot_mention_text()}</i>\n\n"
             "<i>Access/Manage Bot using the following options below.</i>")
 def settings_home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
