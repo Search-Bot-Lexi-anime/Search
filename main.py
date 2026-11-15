@@ -186,11 +186,18 @@ def load_search_catalog() -> list[dict]:
 
 
 def match_anime(query: str, catalog: list[dict]):
+    """Match exact aliases first; use conservative fuzzy matching as a fallback.
+
+    Partial-string and token-set scores are intentionally excluded: they can make
+    unrelated titles (for example, "Ramparts of Ice" and "Ranma") look alike.
+    """
     q = clean_query(query)
     if not q:
         return None
-    best_doc, best_score = None, -1
-    q_words = q.split()
+
+    q_words = [word for word in q.split() if len(word) >= 3]
+    best_doc, best_score, best_coverage = None, -1, 0.0
+
     for doc in catalog:
         for alias in doc.get("key", "").split(","):
             candidate = clean_query(alias)
@@ -198,30 +205,36 @@ def match_anime(query: str, catalog: list[dict]):
                 continue
             if candidate == q:
                 return doc
-            c_words = candidate.split()
+
+            c_words = [word for word in candidate.split() if len(word) >= 3]
+            if not c_words or not q_words:
+                continue
+
+            matched_words = sum(
+                1 for q_word in q_words
+                if any(
+                    q_word == c_word
+                    or (min(len(q_word), len(c_word)) >= 4 and fuzz.ratio(q_word, c_word) >= 88)
+                    for c_word in c_words
+                )
+            )
+            coverage = matched_words / len(q_words)
             score = max(
                 fuzz.WRatio(q, candidate),
                 fuzz.ratio(q, candidate),
-                fuzz.partial_ratio(q, candidate),
                 fuzz.token_sort_ratio(q, candidate),
-                fuzz.token_set_ratio(q, candidate),
             )
-            matched_words = sum(
-                1 for q_word in q_words
-                if any(c_word.startswith(q_word) or fuzz.ratio(q_word, c_word) >= 82
-                       for c_word in c_words)
-            )
-            coverage = matched_words / len(q_words)
-            if coverage == 1:
-                score = max(score, 94 if len(q_words) > 1 else 90)
-            elif coverage >= 0.5:
-                score = max(score, 82 + 10 * coverage)
-            if candidate.startswith(q):
-                score = max(score, min(98, 88 + len(q) * 1.2))
-            if score > best_score:
-                best_doc, best_score = doc, score
-    threshold = 58 if len(q) >= 7 else 66 if len(q) >= 4 else 82
-    return best_doc if best_score >= threshold else None
+
+            if len(q_words) == 1:
+                if len(q_words[0]) < 4 or coverage < 1.0 or score < 90:
+                    continue
+            elif coverage < 0.67 or score < 82:
+                continue
+
+            if (coverage, score) > (best_coverage, best_score):
+                best_doc, best_score, best_coverage = doc, score, coverage
+
+    return best_doc
 
 
 async def find_anime(query: str):
