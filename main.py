@@ -571,14 +571,21 @@ async def track_owner_ui(user_id: int, message: Message, kind: str = "prompt"):
         state["prompts"] = [(item["chat_id"], item["message_id"]) for item in prompts]
 
 
-async def open_owner_panel(user_id: int, chat_id: int, text: str, reply_markup=None) -> Message:
+async def open_owner_panel(
+    user_id: int,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    reply_to_message_id: int | None = None,
+    force_new: bool = False,
+) -> Message:
     state = owner_ui_state.setdefault(user_id, {"prompts": [], "panels": []})
     saved = await asyncio.to_thread(owner_ui_collection.find_one, {"_id": str(user_id)}) or {}
     panel_ref = saved.get("panel")
     if not panel_ref and state.get("panels"):
         old_chat_id, old_message_id = state["panels"][-1]
         panel_ref = {"chat_id": old_chat_id, "message_id": old_message_id}
-    if panel_ref and panel_ref.get("chat_id") == chat_id:
+    if not force_new and reply_to_message_id is None and panel_ref and panel_ref.get("chat_id") == chat_id:
         try:
             panel = await bot.edit_message_text(
                 chat_id=chat_id,
@@ -591,12 +598,18 @@ async def open_owner_panel(user_id: int, chat_id: int, text: str, reply_markup=N
             return panel
         except Exception:
             log.debug("Could not edit the current owner panel; creating a fresh one")
-    panel = await bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        reply_markup=reply_markup,
-        link_preview_options={"is_disabled": True},
-    )
+    send_kwargs = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": reply_markup,
+        "link_preview_options": {"is_disabled": True},
+    }
+    if reply_to_message_id is not None:
+        send_kwargs["reply_parameters"] = ReplyParameters(
+            message_id=reply_to_message_id,
+            allow_sending_without_reply=True,
+        )
+    panel = await bot.send_message(**send_kwargs)
     await track_owner_ui(user_id, panel, "panel")
     return panel
 
@@ -725,7 +738,7 @@ async def deliver_saved(chat_id: int, anime: dict, reply_to: Message | None = No
             message_id=reply_to.message_id,
             allow_sending_without_reply=True,
         )
-    await bot.copy_message(**kwargs)
+    return await bot.copy_message(**kwargs)
 
 def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
     start = page * 10
@@ -1656,11 +1669,30 @@ async def all_messages_handler(message: Message):
             session["key"] = ", ".join(names)
             # Use the same fuzzy alias matcher as public search to prevent near-duplicate records.
             matches = await find_animes(names)
-            duplicates = [name for name in names if matches.get(name)]
-            if duplicates:
+            duplicate_docs = {}
+            duplicate_names = []
+            for name in names:
+                matched = matches.get(name)
+                if matched:
+                    duplicate_names.append(name)
+                    duplicate_docs[str(matched.get("id"))] = matched
+            if duplicate_docs:
+                # Return each already-saved anime once, even if several submitted aliases
+                # point to the same canonical record.
+                for existing in duplicate_docs.values():
+                    try:
+                        await deliver_saved(chat_id=message.chat.id, anime=existing)
+                    except Exception:
+                        log.exception("Could not deliver existing duplicate anime %s", existing.get("id"))
                 await clear_owner_interaction_messages(session, message)
                 pending.pop(user_id, None)
-                await edit_owner_panel(session, "<i>One or more names already match a saved anime. Use /show to inspect existing records.</i>")
+                names_text = escape(", ".join(duplicate_names))
+                await edit_owner_panel(
+                    session,
+                    f"<b><u>ALREADY EXISTS</u></b>\\n\\n"
+                    f"<i>This anime is already saved: {names_text}</i>\\n"
+                    "<i>The existing saved post has been sent above. No duplicate was added.</i>",
+                )
                 return
             session["stage"] = "post"
             await clear_owner_interaction_messages(session, message)
@@ -1825,8 +1857,9 @@ async def all_messages_handler(message: Message):
         match = await find_anime(message.text)
         if match:
             if is_owner(user_id) and is_private_chat(message.chat):
+                saved_result = None
                 try:
-                    await deliver_saved(
+                    saved_result = await deliver_saved(
                         chat_id=message.chat.id,
                         anime=match,
                         reply_to=message,
@@ -1847,6 +1880,8 @@ async def all_messages_handler(message: Message):
                     message.chat.id,
                     anime_panel_text,
                     settings_keyboard,
+                    reply_to_message_id=saved_result.message_id if saved_result else None,
+                    force_new=True,
                 )
                 await cleanup_owner_ui(user_id, keep=(panel.chat.id, panel.message_id))
                 return
