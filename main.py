@@ -1691,7 +1691,7 @@ async def all_messages_handler(message: Message):
                     session,
                     f"<b><u>ALREADY EXISTS</u></b>\n\n"
                     f"<i>This anime is already saved: {names_text}</i>\n"
-                    "<i>The existing saved post has been sent above. No duplicate was added.</i>",
+                    "<i>The existing saved post has been sent to you. No duplicate was added.</i>",
                 )
                 return
             session["stage"] = "post"
