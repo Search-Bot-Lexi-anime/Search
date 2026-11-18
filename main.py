@@ -1450,6 +1450,7 @@ async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, in
 
     return delivered, failed, pinned, pin_failed
 
+@dp.channel_post()
 @dp.message()
 async def all_messages_handler(message: Message):
     # Channel posts have no from_user; treat them as search-only requests.
