@@ -771,6 +771,8 @@ def anime_list_markup(docs: list[dict], page: int) -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
+    if not is_private_chat(message.chat):
+        return
     owner_id = message.from_user.id if (
         message.from_user and is_owner(message.from_user.id) and is_private_chat(message.chat)
     ) else None
@@ -794,6 +796,8 @@ async def start_handler(message: Message):
 @dp.message(Command("settings"))
 @dp.message(Command("commands"))
 async def commands_handler(message: Message):
+    if not is_private_chat(message.chat):
+        return
     if not message.from_user or not is_owner(message.from_user.id):
         return
     if not is_private_chat(message.chat):
@@ -822,6 +826,8 @@ async def commands_handler(message: Message):
 
 @dp.message(Command("setstart"))
 async def setstart_handler(message: Message):
+    if not is_private_chat(message.chat):
+        return
     if not message.from_user or not is_owner(message.from_user.id):
         return
     if not is_private_chat(message.chat):
@@ -1146,6 +1152,8 @@ async def start_back_callback(callback: CallbackQuery):
 
 @dp.message(Command("add"))
 async def add_handler(message: Message):
+    if not is_private_chat(message.chat):
+        return
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     if not is_private_chat(message.chat):
@@ -1176,6 +1184,8 @@ async def add_handler(message: Message):
 
 @dp.message(Command("show"))
 async def show_handler(message: Message):
+    if not is_private_chat(message.chat):
+        return
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     if not is_private_chat(message.chat):
@@ -1310,6 +1320,8 @@ async def replace_callback(callback: CallbackQuery):
 
 @dp.message(Command("broadcast"))
 async def broadcast_handler(message: Message):
+    if not is_private_chat(message.chat):
+        return
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     if not is_private_chat(message.chat):
@@ -1344,6 +1356,8 @@ async def broadcast_handler(message: Message):
 
 @dp.message(Command("pbroadcast"))
 async def pin_broadcast_handler(message: Message):
+    if not is_private_chat(message.chat):
+        return
     if not message.from_user or not is_owner(message.from_user.id):
         return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
     if not is_private_chat(message.chat):
@@ -1436,8 +1450,20 @@ async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, in
 
     return delivered, failed, pinned, pin_failed
 
+@dp.channel_post()
 @dp.message()
 async def all_messages_handler(message: Message):
+    # Channel posts have no from_user; treat them as search-only requests.
+    if message.chat.type == "channel":
+        query = (message.text or message.caption or "").strip()
+        if query and not query.startswith("/"):
+            match = await find_anime(query)
+            if match:
+                try:
+                    await deliver_saved(chat_id=message.chat.id, anime=match)
+                except Exception:
+                    log.exception("Could not deliver saved anime result to channel")
+        return
     if not message.from_user or message.from_user.is_bot:
         return
     user_id = message.from_user.id
