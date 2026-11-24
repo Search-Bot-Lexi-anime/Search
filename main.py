@@ -71,6 +71,10 @@ def run_health_server():
 def is_owner(user_id: int) -> bool:
     return str(user_id) in OWNER_IDS
 
+def content_protection(chat_id: int) -> bool:
+    # Owners' private chats remain unrestricted; all other bot deliveries are protected.
+    return not is_owner(chat_id)
+
 def is_private_chat(chat) -> bool:
     return bool(chat and chat.type == "private")
 
@@ -308,7 +312,10 @@ async def edit_owner_panel(session: dict, text: str, reply_markup=None) -> Messa
 async def send_owner_prompt(user_id: int, session: dict, text: str) -> Message:
     if session.get("settings_message_id"):
         return await edit_owner_panel(session, text)
-    prompt = await bot.send_message(chat_id=session["settings_chat_id"], text=ui(text))
+    prompt = await bot.send_message(
+        chat_id=session["settings_chat_id"], text=ui(text),
+        protect_content=content_protection(session["settings_chat_id"]),
+    )
     session["settings_message_id"] = prompt.message_id
     session.setdefault("prompt_message_ids", []).clear()
     await track_owner_ui(user_id, prompt, "panel")
@@ -506,11 +513,22 @@ async def send_start_page(message: Message):
     markup = start_keyboard(cfg)
     media_type, media_id = cfg.get("media_type"), cfg.get("media_file_id")
     if media_type == "photo" and media_id:
-        return await bot.send_photo(chat_id=message.chat.id, photo=media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
+        return await bot.send_photo(
+            chat_id=message.chat.id, photo=media_id, caption=body,
+            reply_markup=markup, parse_mode=ParseMode.HTML,
+            protect_content=content_protection(message.chat.id),
+        )
     elif media_type == "animation" and media_id:
-        return await bot.send_animation(chat_id=message.chat.id, animation=media_id, caption=body, reply_markup=markup, parse_mode=ParseMode.HTML)
-    return await bot.send_message(chat_id=message.chat.id, text=body, reply_markup=markup, parse_mode=ParseMode.HTML,
-                                   link_preview_options={"is_disabled": True})
+        return await bot.send_animation(
+            chat_id=message.chat.id, animation=media_id, caption=body,
+            reply_markup=markup, parse_mode=ParseMode.HTML,
+            protect_content=content_protection(message.chat.id),
+        )
+    return await bot.send_message(
+        chat_id=message.chat.id, text=body, reply_markup=markup, parse_mode=ParseMode.HTML,
+        link_preview_options={"is_disabled": True},
+        protect_content=content_protection(message.chat.id),
+    )
 
 
 pending: dict[int, dict] = {}
@@ -616,6 +634,7 @@ async def open_owner_panel(
         "text": text,
         "reply_markup": reply_markup,
         "link_preview_options": {"is_disabled": True},
+        "protect_content": content_protection(chat_id),
     }
     if reply_to_message_id is not None:
         send_kwargs["reply_parameters"] = ReplyParameters(
@@ -742,6 +761,7 @@ async def deliver_saved(chat_id: int, anime: dict, reply_to: Message | None = No
         "chat_id": chat_id,
         "from_chat_id": DATA_CHANNEL_ID,
         "message_id": int(anime["id"]),
+        "protect_content": content_protection(chat_id),
     }
     keyboard = result_keyboard_for_anime(anime)
     if keyboard is not None:
@@ -812,6 +832,7 @@ async def commands_handler(message: Message):
         text=settings_home_text(),
         reply_markup=settings_home_keyboard(),
         link_preview_options={"is_disabled": True},
+        protect_content=content_protection(message.chat.id),
     )
 
     await track_owner_ui(owner_id, new_panel, "panel")
@@ -1401,6 +1422,7 @@ async def broadcast_message(source: Message, pin: bool = False) -> tuple[int, in
                     from_chat_id=source.chat.id,
                     message_id=source.message_id,
                     reply_markup=source.reply_markup,
+                    protect_content=content_protection(user_id),
                 )
                 delivered += 1
                 break
