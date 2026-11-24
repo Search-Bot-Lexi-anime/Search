@@ -1176,7 +1176,11 @@ async def add_handler(message: Message):
     if not is_private_chat(message.chat):
         return
     if not message.from_user or not is_owner(message.from_user.id):
-        return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+        return await bot.send_message(
+            chat_id=message.chat.id,
+            text=ui("This command is available to owners only."),
+            protect_content=content_protection(message.chat.id),
+        )
     if not is_private_chat(message.chat):
         await delete_command_message(message)
         return
@@ -1208,7 +1212,11 @@ async def show_handler(message: Message):
     if not is_private_chat(message.chat):
         return
     if not message.from_user or not is_owner(message.from_user.id):
-        return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+        return await bot.send_message(
+            chat_id=message.chat.id,
+            text=ui("This command is available to owners only."),
+            protect_content=content_protection(message.chat.id),
+        )
     if not is_private_chat(message.chat):
         await delete_command_message(message)
         return
@@ -1344,7 +1352,11 @@ async def broadcast_handler(message: Message):
     if not is_private_chat(message.chat):
         return
     if not message.from_user or not is_owner(message.from_user.id):
-        return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+        return await bot.send_message(
+            chat_id=message.chat.id,
+            text=ui("This command is available to owners only."),
+            protect_content=content_protection(message.chat.id),
+        )
     if not is_private_chat(message.chat):
         await delete_command_message(message)
         return
@@ -1380,7 +1392,11 @@ async def pin_broadcast_handler(message: Message):
     if not is_private_chat(message.chat):
         return
     if not message.from_user or not is_owner(message.from_user.id):
-        return await bot.send_message(chat_id=message.chat.id, text=ui("This command is available to owners only."))
+        return await bot.send_message(
+            chat_id=message.chat.id,
+            text=ui("This command is available to owners only."),
+            protect_content=content_protection(message.chat.id),
+        )
     if not is_private_chat(message.chat):
         await delete_command_message(message)
         return
